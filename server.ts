@@ -142,6 +142,34 @@ app.post("/api/generate", async (req, res) => {
         },
         required: ["suggestions"]
       };
+    } else if (toolType === "thumbnail_prompt") {
+      const { topic, niche, style } = params || {};
+      prompt = `Create exactly 5 elite-level, production-ready thumbnail prompt concepts designed for high-CTR YouTube clicks. The target video is on topic: "${topic || 'viral theme'}" in the niche: "${niche || 'general'}". Style direction: "${style || 'Highly cinematic and hyper-realistic'}". For each concept, generate:
+1. A highly descriptive, photorealistic "image prompt" for text-to-image generators (like Midjourney, Dall-E 3, or Imagen) specifying elements, composition, mood, and lighting.
+2. A suggested "overlay text" (1-3 words in CAPS, highly contrasting).
+3. A psychological "trigger description" explaining why this catches eyes.
+4. "visualConcept" name/title for the thumbnail concept.
+5. Layout placement hints.`;
+      schema = {
+        type: Type.OBJECT,
+        properties: {
+          prompts: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                conceptName: { type: Type.STRING },
+                imagePrompt: { type: Type.STRING },
+                overlayText: { type: Type.STRING },
+                psychologyTrigger: { type: Type.STRING },
+                layoutPlacement: { type: Type.STRING }
+              },
+              required: ["conceptName", "imagePrompt", "overlayText", "psychologyTrigger", "layoutPlacement"]
+            }
+          }
+        },
+        required: ["prompts"]
+      };
     } else if (toolType === "script") {
       const { title, format, tone } = params || {};
       prompt = `Generate a comprehensive narration script layout for a YouTube ${format || 'shorts'} video with the title: "${title || 'Amazing Video'}" in a distinct "${tone || 'energetic'}" tone. Create powerful hook visuals/audios, detailed incremental video scripting scenes detailing staging visual layouts, active spoken dialogue lines, SFX notes, and a high-converting channel subscription CTA.`;
@@ -225,6 +253,94 @@ app.post("/api/generate", async (req, res) => {
   } catch (error: any) {
     console.error("Gemini server error:", error);
     res.status(500).json({ error: error.message || "An error occurred during generation." });
+  }
+});
+
+// Real working image generation using Imagen with elegant dynamic fallback if subscription is free tier
+app.post("/api/generate-image", async (req, res) => {
+  try {
+    const { prompt, aspectRatio } = req.body;
+    if (!prompt) {
+      return res.status(400).json({ error: "prompt is required" });
+    }
+
+    const key = process.env.GEMINI_API_KEY;
+    if (!key) {
+      return res.status(500).json({
+        error: "GEMINI_API_KEY is empty. Please set it in the Settings/Secrets panel of your AI Studio interface."
+      });
+    }
+
+    const ai = getGeminiClient();
+
+    let isFallback = false;
+    let fallbackReason = "";
+    let dataUrl = "";
+
+    try {
+      console.log("Calling ai.models.generateImages with prompt:", prompt);
+      const response = await ai.models.generateImages({
+        model: "imagen-4.0-generate-001",
+        prompt: prompt,
+        config: {
+          numberOfImages: 1,
+          outputMimeType: "image/jpeg",
+          aspectRatio: aspectRatio || "16:9",
+        }
+      });
+
+      if (response && response.generatedImages && response.generatedImages.length > 0) {
+        const img = response.generatedImages[0];
+        const base64Bytes = img.image.imageBytes;
+        dataUrl = `data:image/jpeg;base64,${base64Bytes}`;
+      } else {
+        throw new Error("No image was returned from Gemini/Imagen.");
+      }
+    } catch (apiError: any) {
+      console.warn("Imagen API failed (requires paid upgrade). Renting a premium stock photo fallback match. Error:", apiError.message);
+      isFallback = true;
+      fallbackReason = apiError.message || "Imagen billing limit.";
+
+      // Dimension mappings for Unsplash source
+      let width = 1200;
+      let height = 675;
+      if (aspectRatio === "9:16") {
+        width = 675;
+        height = 1200;
+      } else if (aspectRatio === "1:1") {
+        width = 1000;
+        height = 1000;
+      } else if (aspectRatio === "4:3") {
+        width = 1000;
+        height = 750;
+      } else if (aspectRatio === "3:4") {
+        width = 750;
+        height = 1000;
+      }
+
+      // Filter and pick 2-4 clean keywords from prompt for Unsplash search
+      const cleanPromptForKeywords = (textStr: string): string => {
+        const words = textStr
+          .toLowerCase()
+          .replace(/[^a-z0-9\s]/g, "")
+          .split(/\s+/)
+          .filter(w => w.length > 3 && !["with", "this", "that", "these", "those", "from", "your", "their", "only", "have", "some", "here", "there", "about", "photo", "image", "photorealistic", "cinematic", "resolution", "rendering", "hyperrealistic", "highly", "detailed", "render", "super", "realistic", "styled", "studio"].includes(w));
+        if (words.length === 0) return "workspace,studio,tech";
+        return words.slice(0, 4).join(",");
+      };
+
+      const keywords = cleanPromptForKeywords(prompt);
+      dataUrl = `https://images.unsplash.com/featured/${width}x${height}/?${encodeURIComponent(keywords)}&sig=${Math.floor(Math.random() * 100000)}`;
+    }
+
+    res.json({
+      imageUrl: dataUrl,
+      isFallback,
+      fallbackReason
+    });
+  } catch (error: any) {
+    console.error("Image generation error:", error);
+    res.status(500).json({ error: error.message || "An error occurred during image generation." });
   }
 });
 

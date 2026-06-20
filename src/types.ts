@@ -2,7 +2,7 @@
 
 export interface SavedItem {
   id: string;
-  type: "idea" | "title" | "description" | "thumbnail" | "script" | "trend";
+  type: "idea" | "title" | "description" | "thumbnail" | "thumbnail_prompt" | "script" | "trend";
   title: string;
   timestamp: string;
   data: any; // Contains the specific payload of the generation
@@ -85,4 +85,19 @@ export interface TrendPayload {
   category: string;
   platform: string;
   trends: TrendItem[];
+}
+
+export interface ThumbnailPromptConcept {
+  conceptName: string;
+  imagePrompt: string;
+  overlayText: string;
+  psychologyTrigger: string;
+  layoutPlacement: string;
+}
+
+export interface ThumbnailPromptPayload {
+  topic: string;
+  niche: string;
+  style: string;
+  prompts: ThumbnailPromptConcept[];
 }

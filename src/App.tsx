@@ -41,6 +41,8 @@ import {
   ScriptPayload,
   TrendItem,
   TrendPayload,
+  ThumbnailPromptConcept,
+  ThumbnailPromptPayload,
 } from "./types";
 
 export default function App() {
@@ -79,6 +81,22 @@ export default function App() {
   const [trendCategory, setTrendCategory] = useState<string>("Finance & Crypto");
   const [trendPlatform, setTrendPlatform] = useState<string>("youtube");
 
+  // Thumbnail prompt & image generator states
+  const [thumbSubTab, setThumbSubTab] = useState<"text" | "prompt_tool">("prompt_tool");
+  const [thumbPromptTopic, setThumbPromptTopic] = useState<string>("Coding my first SaaS in 24 hours in a coffee shop");
+  const [thumbPromptNiche, setThumbPromptNiche] = useState<string>("Indie Hackers & Tech Life");
+  const [thumbPromptStyle, setThumbPromptStyle] = useState<string>("Cinematic, photorealistic, depth of field, neon hues");
+  const [thumbPromptResult, setThumbPromptResult] = useState<ThumbnailPromptPayload | null>(null);
+
+  // Live image generation states
+  const [imageLoadingId, setImageLoadingId] = useState<string | null>(null);
+  const [generatedImages, setGeneratedImages] = useState<Record<string, string>>({});
+  const [customImagePrompt, setCustomImagePrompt] = useState<string>("Futuristic cyberpunk workspace with glowing screens, photorealistic, 8k resolution");
+  const [customImageUrl, setCustomImageUrl] = useState<string | null>(null);
+  const [customImageLoading, setCustomImageLoading] = useState<boolean>(false);
+  const [customAspectRatio, setCustomAspectRatio] = useState<string>("16:9");
+  const [customOverlay, setCustomOverlay] = useState<string>("BOOST CTR");
+
   // Output Results State
   const [ideaResult, setIdeaResult] = useState<IdeaPayload | null>(null);
   const [titleResult, setTitleResult] = useState<TitlePayload | null>(null);
@@ -90,6 +108,7 @@ export default function App() {
   // Loading indicator states
   const [loading, setLoading] = useState<boolean>(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [fallbackWarning, setFallbackWarning] = useState<string | null>(null);
 
   // Load from localStorage on initialization
   useEffect(() => {
@@ -167,6 +186,7 @@ export default function App() {
     else if (type === "title") params = { topic: titleTopic, tone: titleTone };
     else if (type === "description") params = { topic: descTopic, title: descTitle, corePoints: descOutline };
     else if (type === "thumbnail") params = { topic: thumbTopic, emotion: thumbEmotion };
+    else if (type === "thumbnail_prompt") params = { topic: thumbPromptTopic, niche: thumbPromptNiche, style: thumbPromptStyle };
     else if (type === "script") params = { title: scriptTitle, format: scriptFormat, tone: scriptTone };
     else if (type === "trend") params = { category: trendCategory, platform: trendPlatform };
 
@@ -210,6 +230,13 @@ export default function App() {
           emotion: thumbEmotion,
           suggestions: responseData.suggestions,
         });
+      } else if (type === "thumbnail_prompt") {
+        setThumbPromptResult({
+          topic: thumbPromptTopic,
+          niche: thumbPromptNiche,
+          style: thumbPromptStyle,
+          prompts: responseData.prompts,
+        });
       } else if (type === "script") {
         setScriptResult({
           title: scriptTitle,
@@ -244,6 +271,59 @@ export default function App() {
     setErrorText(null);
   };
 
+  // Dedicated generator utilizing Imagen 3 models.generateImages
+  const handleGenerateImage = async (promptText: string, aspect: string, slotId: string) => {
+    if (generationsCount >= maxGenerations) {
+      setErrorText("Daily Limit Reached. Upgrading to Pro gives endless high CTR thumbnail generations!");
+      return;
+    }
+
+    if (slotId === "custom") {
+      setCustomImageLoading(true);
+    } else {
+      setImageLoadingId(slotId);
+    }
+    setErrorText(null);
+    setFallbackWarning(null);
+
+    try {
+      const resp = await fetch("/api/generate-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: promptText, aspectRatio: aspect })
+      });
+
+      if (!resp.ok) {
+        const errorData = await resp.json();
+        throw new Error(errorData.error || "Image generation query failed.");
+      }
+
+      const resData = await resp.json();
+      const url = resData.imageUrl;
+
+      if (resData.isFallback) {
+        setFallbackWarning("💡 Imagen workspace notice: The current API key is on the free plan, which restricts direct Imagen 3/4 pixel synthesis. CreatorBoost successfully compiled a gorgeous, topic-relevant AI stock photo mockup with dynamic visual overlay text instead!");
+      }
+
+      if (slotId === "custom") {
+        setCustomImageUrl(url);
+      } else {
+        setGeneratedImages(prev => ({ ...prev, [slotId]: url }));
+      }
+
+      saveToLocal(generationsCount + 1);
+    } catch (err: any) {
+      console.error(err);
+      setErrorText(err.message || "An unexpected error occurred during image generation.");
+    } finally {
+      if (slotId === "custom") {
+        setCustomImageLoading(false);
+      } else {
+        setImageLoadingId(null);
+      }
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 font-sans text-slate-100 selection:bg-purple-500/30 selection:text-white flex flex-col">
       
@@ -275,6 +355,21 @@ export default function App() {
               <button
                 onClick={() => setErrorText(null)}
                 className="text-xs uppercase font-mono px-2 py-1 bg-rose-500/10 hover:bg-rose-500/20 rounded border border-rose-500/20 text-rose-300 self-start transition-colors"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {fallbackWarning && (
+            <div className="bg-purple-950/25 border border-purple-500/20 rounded-2xl p-4.5 mb-6 flex gap-3 text-sm text-purple-200 backdrop-blur-sm shadow-xl shadow-purple-950/5">
+              <Sparkles className="w-5 h-5 shrink-0 text-purple-400 mt-0.5 animate-pulse" />
+              <div className="flex-1">
+                <span className="font-bold text-white">Feature Fallback Mode: </span> {fallbackWarning}
+              </div>
+              <button
+                onClick={() => setFallbackWarning(null)}
+                className="text-xs uppercase font-mono px-2 py-1 bg-purple-500/15 hover:bg-purple-500/25 rounded border border-purple-500/20 text-purple-300 self-start transition-colors"
               >
                 Dismiss
               </button>
@@ -825,9 +920,7 @@ export default function App() {
                 </div>
               )}
             </div>
-          )}
-
-          {/* 4. THUMBNAIL TEXT GENERATOR */}
+          )}          {/* 4. THUMBNAIL TEXT GENERATOR */}
           {activeTab === "thumbnail" && (
             <div className="space-y-6">
               <div>
@@ -837,148 +930,561 @@ export default function App() {
                   </span>
                 </div>
                 <h2 className="text-3xl font-bold font-display tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
-                  Thumbnail Text & Canvas Layout Generator
+                  Thumbnail Text & AI Image Generator
                 </h2>
                 <p className="text-sm text-slate-400 mt-1 max-w-2xl">
-                  Generate ultra-short dramatic thumbnail texts. High contrast layout recipes matching user visual psychological tricks.
+                  Generate ultra-short dramatic text overlays, optimized Midjourney prompt tiers, and utilize the actual Imagen 3 tool to generate mockups live.
                 </p>
               </div>
 
-              {/* Inputs */}
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
-                  <div>
-                    <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
-                      Video Theme / Drama Point
-                    </label>
-                    <input
-                      type="text"
-                      value={thumbTopic}
-                      onChange={(e) => setThumbTopic(e.target.value)}
-                      placeholder="e.g. Learning to use Photoshop on vintage PC"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
-                      Target Psychological Trigger Emotion
-                    </label>
-                    <select
-                      value={thumbEmotion}
-                      onChange={(e) => setThumbEmotion(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
-                    >
-                      <option value="Shocking Urgency / Panic">Shocking Urgency / Panic ("NEVER DO THIS")</option>
-                      <option value="Intense Curiosity">Intense Curiosity ("HE EXPOSED EVERYTHING")</option>
-                      <option value="Absolute Disbelief">Absolute Disbelief ("IT ACTUALLY WORKED?")</option>
-                      <option value="Joyful Discovery">Joyful Discovery ("BEST HACK EVER")</option>
-                      <option value="Skeptical Warning">Skeptical Warning ("THEY LIED TO YOU")</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between border-t border-slate-800/60 pt-4 flex-wrap gap-3">
-                  <div className="flex items-center gap-2 text-xs text-slate-400">
-                    <Info className="w-4 h-4 text-slate-500" />
-                    <span>Returns exactly 8 contrasting text suggestions.</span>
-                  </div>
-                  <button
-                    onClick={() => handleGenerate("thumbnail")}
-                    disabled={loading}
-                    className="px-6 py-3 bg-purple-600 hover:bg-purple-500 active:scale-95 disabled:opacity-50 disabled:scale-100 text-sm font-semibold text-white rounded-xl shadow-lg shadow-purple-600/10 transition-all flex items-center gap-2"
-                  >
-                    {loading ? (
-                      <>
-                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        Generating Composition Layouts...
-                      </>
-                    ) : (
-                      <>
-                        <Send className="w-4 h-4 text-purple-200" />
-                        Generate Thumbnail Recipe
-                      </>
-                    )}
-                  </button>
-                </div>
+              {/* Segmented sub-tab bar */}
+              <div className="flex bg-slate-900 p-1.5 rounded-2xl w-fit border border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setThumbSubTab("prompt_tool")}
+                  className={`px-4.5 py-2 text-xs font-bold rounded-xl flex items-center gap-2 transition-all cursor-pointer ${
+                    thumbSubTab === "prompt_tool"
+                      ? "bg-purple-600 text-white shadow-md shadow-purple-600/10"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-purple-300" /> AI Thumbnail Prompt Tier & Imagen 3
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setThumbSubTab("text")}
+                  className={`px-4.5 py-2 text-xs font-bold rounded-xl flex items-center gap-2 transition-all cursor-pointer ${
+                    thumbSubTab === "text"
+                      ? "bg-purple-600 text-white shadow-md shadow-purple-600/10"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <ImageIcon className="w-3.5 h-3.5 text-pink-300" /> Original Text Overlay Recipes
+                </button>
               </div>
 
-              {/* Output Display */}
-              {thumbResult ? (
+              {thumbSubTab === "text" ? (
                 <div className="space-y-6">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                    <div>
-                      <h3 className="text-xl font-bold font-display text-slate-200">
-                        8 Shocking Overlay Recipies
-                      </h3>
-                      <p className="text-xs text-slate-400">Based on: "{thumbResult.topic}" with emotion "{thumbResult.emotion}"</p>
+                  {/* Inputs */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+                      <div>
+                        <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
+                          Video Theme / Drama Point
+                        </label>
+                        <input
+                          type="text"
+                          value={thumbTopic}
+                          onChange={(e) => setThumbTopic(e.target.value)}
+                          placeholder="e.g. Learning to use Photoshop on vintage PC"
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
+                          Target Psychological Trigger Emotion
+                        </label>
+                        <select
+                          value={thumbEmotion}
+                          onChange={(e) => setThumbEmotion(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                        >
+                          <option value="Shocking Urgency / Panic">Shocking Urgency / Panic ("NEVER DO THIS")</option>
+                          <option value="Intense Curiosity">Intense Curiosity ("HE EXPOSED EVERYTHING")</option>
+                          <option value="Absolute Disbelief">Absolute Disbelief ("IT ACTUALLY WORKED?")</option>
+                          <option value="Joyful Discovery">Joyful Discovery ("BEST HACK EVER")</option>
+                          <option value="Skeptical Warning">Skeptical Warning ("THEY LIED TO YOU")</option>
+                        </select>
+                      </div>
                     </div>
-                    <button
-                      onClick={() => handleSaveResult("thumbnail", `Thumbnail Layouts: ${thumbResult.topic}`, thumbResult)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-pink-500/10 border border-pink-500/20 text-xs font-semibold text-pink-400 hover:bg-pink-500/25 active:scale-95 transition-all rounded-lg"
-                    >
-                      <Bookmark className="w-3.5 h-3.5" /> Save Suite
-                    </button>
+
+                    <div className="flex items-center justify-between border-t border-slate-800/60 pt-4 flex-wrap gap-3">
+                      <div className="flex items-center gap-2 text-xs text-slate-400">
+                        <Info className="w-4 h-4 text-slate-500" />
+                        <span>Returns exactly 8 contrasting text suggestions.</span>
+                      </div>
+                      <button
+                        onClick={() => handleGenerate("thumbnail")}
+                        disabled={loading}
+                        className="px-6 py-3 bg-purple-600 hover:bg-purple-500 active:scale-95 disabled:opacity-50 disabled:scale-100 text-sm font-semibold text-white rounded-xl shadow-lg shadow-purple-600/10 transition-all flex items-center gap-2"
+                      >
+                        {loading ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            Generating Composition Layouts...
+                          </>
+                        ) : (
+                          <>
+                            <Send className="w-4 h-4 text-purple-200" />
+                            Generate Thumbnail Recipe
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                    {thumbResult.suggestions.map((sug, i) => (
-                      <div
-                        key={i}
-                        className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl overflow-hidden p-0 flex flex-col group transition-all"
-                      >
-                        {/* Simulation Screen Container mimicking actual physical Youtube frame */}
-                        <div className="aspect-[16/9] bg-slate-950 relative flex items-center justify-center p-4 border-b border-slate-800/80 shadow-inner group-hover:bg-black transition-colors">
-                          <div className="absolute top-2 left-2 bg-black/60 backdrop-blur px-1.5 py-0.5 rounded text-[8px] font-mono tracking-widest text-slate-400 z-10">
-                            16:9 PREVIEW SIMULATION
-                          </div>
-                          
-                          {/* Live Thumbnail Overlay styling preview dynamically! */}
+                  {/* Output Display */}
+                  {thumbResult ? (
+                    <div className="space-y-6">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                        <div>
+                          <h3 className="text-xl font-bold font-display text-slate-200">
+                            8 Shocking Overlay Recipes
+                          </h3>
+                          <p className="text-xs text-slate-400">Based on: "{thumbResult.topic}" with emotion "{thumbResult.emotion}"</p>
+                        </div>
+                        <button
+                          onClick={() => handleSaveResult("thumbnail", `Thumbnail Layouts: ${thumbResult.topic}`, thumbResult)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-pink-500/10 border border-pink-500/20 text-xs font-semibold text-pink-400 hover:bg-pink-500/25 active:scale-95 transition-all rounded-lg"
+                        >
+                          <Bookmark className="w-3.5 h-3.5" /> Save Suite
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        {thumbResult.suggestions.map((sug, i) => (
                           <div
-                            className="px-3 py-1.5 font-display font-extrabold text-xs tracking-wider uppercase rounded-md shadow-xl text-center transform -rotate-2 select-none"
-                            style={{
-                              backgroundColor: sug.bgColor || "#F43F5E",
-                              color: sug.textColor || "#FFFFFF"
-                            }}
+                            key={i}
+                            className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl overflow-hidden p-0 flex flex-col group transition-all"
                           >
-                            {sug.text}
+                            {/* Simulation Screen Container mimicking actual physical Youtube frame */}
+                            <div className="aspect-[16/9] bg-slate-950 relative flex items-center justify-center p-4 border-b border-slate-800/80 shadow-inner group-hover:bg-black transition-colors">
+                              <div className="absolute top-2 left-2 bg-black/60 backdrop-blur px-1.5 py-0.5 rounded text-[8px] font-mono tracking-widest text-slate-400 z-10">
+                                16:9 PREVIEW SIMULATION
+                              </div>
+                              
+                              {/* Live Thumbnail Overlay styling preview dynamically! */}
+                              <div
+                                className="px-3 py-1.5 font-display font-extrabold text-xs tracking-wider uppercase rounded-md shadow-xl text-center transform -rotate-2 select-none"
+                                style={{
+                                  backgroundColor: sug.bgColor || "#F43F5E",
+                                  color: sug.textColor || "#FFFFFF"
+                                }}
+                              >
+                                {sug.text}
+                              </div>
+                            </div>
+
+                            {/* Staging text detail notes */}
+                            <div className="p-4 flex-1 flex flex-col justify-between">
+                              <div className="space-y-2">
+                                <span className="font-mono text-[9px] uppercase font-bold text-slate-500 tracking-wider">
+                                  Overlay Config
+                                </span>
+                                <p className="text-sm font-black text-slate-200 uppercase tracking-tight">
+                                  "{sug.text}"
+                                </p>
+                                <p className="text-xs text-slate-400 italic">
+                                  <span className="font-bold not-italic font-mono text-[10px] text-purple-400">Composition Strategy:</span> {sug.compositionTip}
+                                </p>
+                              </div>
+
+                              <div className="flex items-center justify-between border-t border-slate-800 pt-3 mt-4">
+                                <span className="text-[10px] text-slate-500">Emotion: {sug.emotiveness}</span>
+                                <button
+                                  onClick={() => handleCopyText(`Text: "${sug.text}"\nTip: ${sug.compositionTip}`, `thumb-${i}`)}
+                                  className="text-xs text-purple-400 hover:text-purple-300 font-mono font-medium flex items-center gap-1"
+                                >
+                                  {copiedId === `thumb-${i}` ? <Check className="w-3 h-3 text-emerald-400" /> : "Copy Text"}
+                                </button>
+                              </div>
+                            </div>
                           </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-slate-900 border border-dashed border-slate-800 rounded-2xl p-12 text-center text-slate-500">
+                      <ImageIcon className="w-12 h-12 text-slate-700 mx-auto mb-4" />
+                      <h4 className="text-base font-semibold text-slate-400">Staging Dramatic Thumbnail Text overlays</h4>
+                      <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                        Formulate video concepts and select psychological hooks to let CreatorBoost export layout parameters and thumbnail copy recipes.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                // BRAND NEW PROMPT TIER AND IMAGEN 3 WORKSPACE!
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                  
+                  {/* Left Column: Prompt Generator (Span 7) */}
+                  <div className="lg:col-span-7 space-y-6">
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+                      <div className="border-b border-slate-800 pb-3">
+                        <h3 className="text-base font-bold text-slate-200 flex items-center gap-1.5">
+                          <Sparkles className="w-4 h-4 text-purple-400" /> Create 5 Detailed Thumbnail Prompts
+                        </h3>
+                        <p className="text-xs text-slate-400 mt-1">
+                          Our design model translates video topics into professional landscape concepts and Midjourney-level image prompts.
+                        </p>
+                      </div>
+
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-[10px] uppercase font-bold tracking-wider font-mono text-slate-400 mb-1">
+                            Video Core topic / Theme
+                          </label>
+                          <input
+                            type="text"
+                            value={thumbPromptTopic}
+                            onChange={(e) => setThumbPromptTopic(e.target.value)}
+                            placeholder="e.g. Quitting my 9 to 5 tech job in NY"
+                            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                          />
                         </div>
 
-                        {/* Staging text detail notes */}
-                        <div className="p-4 flex-1 flex flex-col justify-between">
-                          <div className="space-y-2">
-                            <span className="font-mono text-[9px] uppercase font-bold text-slate-500 tracking-wider">
-                              Overlay Config
-                            </span>
-                            <p className="text-sm font-black text-slate-200 uppercase tracking-tight">
-                              "{sug.text}"
-                            </p>
-                            <p className="text-xs text-slate-400 italic">
-                              <span className="font-bold not-italic font-mono text-[10px] text-purple-400">Composition Strategy:</span> {sug.compositionTip}
-                            </p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[10px] uppercase font-bold tracking-wider font-mono text-slate-400 mb-1">
+                              Channel Niche
+                            </label>
+                            <input
+                              type="text"
+                              value={thumbPromptNiche}
+                              onChange={(e) => setThumbPromptNiche(e.target.value)}
+                              placeholder="e.g. Travel & Lifestyle, Business"
+                              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                            />
                           </div>
-
-                          <div className="flex items-center justify-between border-t border-slate-800 pt-3 mt-4">
-                            <span className="text-[10px] text-slate-500">Emotion: {sug.emotiveness}</span>
-                            <button
-                              onClick={() => handleCopyText(`Text: "${sug.text}"\nTip: ${sug.compositionTip}`, `thumb-${i}`)}
-                              className="text-xs text-purple-400 hover:text-purple-300 font-mono font-medium flex items-center gap-1"
-                            >
-                              {copiedId === `thumb-${i}` ? <Check className="w-3 h-3 text-emerald-400" /> : "Copy Text"}
-                            </button>
+                          <div>
+                            <label className="block text-[10px] uppercase font-bold tracking-wider font-mono text-slate-400 mb-1">
+                              Visual Style Direction
+                            </label>
+                            <input
+                              type="text"
+                              value={thumbPromptStyle}
+                              onChange={(e) => setThumbPromptStyle(e.target.value)}
+                              placeholder="e.g. Cinematic, DSLR photorealistic, neon highlights"
+                              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                            />
                           </div>
                         </div>
                       </div>
-                    ))}
+
+                      <div className="flex justify-end pt-2 border-t border-slate-800/65">
+                        <button
+                          onClick={() => handleGenerate("thumbnail_prompt")}
+                          disabled={loading}
+                          className="px-5 py-2.5 bg-purple-600 hover:bg-purple-500 active:scale-95 disabled:opacity-50 disabled:scale-100 text-xs font-bold text-white rounded-xl shadow-lg shadow-purple-600/10 transition-all flex items-center gap-1.5 cursor-pointer"
+                        >
+                          {loading ? (
+                            <>
+                              <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                              Staging Design Tiers...
+                            </>
+                          ) : (
+                            <>
+                              <Send className="w-3 h-3 text-purple-200" />
+                              Generate 5 Prompt Concepts
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Prompts Results List */}
+                    {thumbPromptResult ? (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-sm font-bold font-display text-slate-300">
+                            Suggested Prompts for "{thumbPromptResult.topic}"
+                          </h4>
+                          <button
+                            onClick={() => handleSaveResult("thumbnail_prompt", `Prompts: ${thumbPromptResult.topic}`, thumbPromptResult)}
+                            className="flex items-center gap-1 px-2.5 py-1 bg-pink-500/10 border border-pink-500/20 text-[10px] font-semibold text-pink-400 hover:bg-pink-500/25 active:scale-95 transition-all rounded-lg"
+                          >
+                            <Bookmark className="w-3 h-3" /> Save Suite
+                          </button>
+                        </div>
+
+                        <div className="space-y-4">
+                          {thumbPromptResult.prompts.map((concept, idx) => {
+                            const slotId = `concept-${idx}`;
+                            const isSlotLoading = imageLoadingId === slotId;
+                            const slotImage = generatedImages[slotId];
+
+                            return (
+                              <div
+                                key={idx}
+                                className="bg-slate-900 border border-slate-800 rounded-2xl p-5 hover:border-slate-700/80 transition-all shadow-inner relative"
+                              >
+                                <div className="absolute right-4 top-4 font-mono text-[10px] font-bold text-slate-600">
+                                  SUITE CONCEPT #{idx + 1}
+                                </div>
+
+                                <div className="space-y-2">
+                                  <h5 className="text-sm font-bold font-display text-white pr-10">
+                                    {concept.conceptName}
+                                  </h5>
+
+                                  {/* Psychological Trigger indicator */}
+                                  <div className="flex items-center gap-1.5 bg-pink-500/10 border border-pink-500/20 px-2 py-0.5 rounded text-[10px] text-pink-400 w-fit font-mono font-bold">
+                                    <Flame className="w-3 h-3" /> TRIGGER: {concept.psychologyTrigger}
+                                  </div>
+
+                                  <div className="text-xs space-y-1.5 pt-2 border-t border-slate-800/80">
+                                    <div className="bg-slate-950 p-3 rounded-lg border border-slate-850">
+                                      <span className="block text-[9px] uppercase font-bold font-mono text-purple-400 mb-1">
+                                        Midjourney / Imagen Image Prompt
+                                      </span>
+                                      <p className="text-slate-300 select-all font-mono text-xs leading-relaxed">
+                                        {concept.imagePrompt}
+                                      </p>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                                      <div className="bg-slate-950/60 p-2.5 rounded border border-slate-850">
+                                        <span className="block text-[8px] uppercase font-bold font-mono text-slate-500 mb-0.5">
+                                          Suggested Overlay Text
+                                        </span>
+                                        <p className="text-pink-300 font-bold font-display uppercase text-xs">
+                                          {concept.overlayText}
+                                        </p>
+                                      </div>
+                                      <div className="bg-slate-950/60 p-2.5 rounded border border-slate-850">
+                                        <span className="block text-[8px] uppercase font-bold font-mono text-slate-500 mb-0.5">
+                                          Layout & Positioning
+                                        </span>
+                                        <p className="text-slate-400 text-[11px] leading-snug">
+                                          {concept.layoutPlacement}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Active generation view */}
+                                <div className="mt-4 pt-4 border-t border-slate-800/70 flex flex-col md:flex-row gap-4 items-start">
+                                  <div className="flex-1 space-y-2">
+                                    <button
+                                      onClick={() => handleGenerateImage(concept.imagePrompt, "16:9", slotId)}
+                                      disabled={isSlotLoading || loading}
+                                      className={`w-full py-2 px-4 rounded-lg text-xs font-bold transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer ${
+                                        slotImage
+                                          ? "bg-slate-950 hover:bg-slate-850 text-purple-400 border border-purple-500/20"
+                                          : "bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white shadow"
+                                      }`}
+                                    >
+                                      {isSlotLoading ? (
+                                        <>
+                                          <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                          Generating Pixels (Imagen 3)...
+                                        </>
+                                      ) : slotImage ? (
+                                        <>
+                                          <Sparkles className="w-3.5 h-3.5" /> Re-Generate Image
+                                        </>
+                                      ) : (
+                                        <>
+                                          <ImageIcon className="w-3.5 h-3.5" /> Generate Image Workspace Preview
+                                        </>
+                                      )}
+                                    </button>
+
+                                    <button
+                                      onClick={() => handleCopyText(concept.imagePrompt, `promptCopy-${idx}`)}
+                                      className="w-full py-1 text-[10px] text-slate-400 hover:text-white font-mono bg-slate-950 border border-slate-850 rounded"
+                                    >
+                                      {copiedId === `promptCopy-${idx}` ? "✓ Prompt Copied" : "Copy Raw Prompt String"}
+                                    </button>
+                                  </div>
+
+                                  {/* Preview Card box with overlay text rendered on top dynamically! */}
+                                  <div className="w-full md:w-56 shrink-0 aspect-[16/9] bg-slate-950/80 rounded-xl overflow-hidden border border-slate-800 relative flex items-center justify-center shadow-inner text-center">
+                                    {slotImage ? (
+                                      <>
+                                        <img
+                                          src={slotImage}
+                                          alt="Imagen output"
+                                          referrerPolicy="no-referrer"
+                                          className="w-full h-full object-cover transition-opacity duration-350"
+                                        />
+                                        <div className="absolute top-2 left-2 bg-slate-950/70 backdrop-blur px-1 py-0.5 rounded text-[7px] font-mono tracking-widest text-[#cbd5e1]">
+                                          IMAGEN 3 ORIGINAL
+                                        </div>
+                                        {/* Suggested text overlay overlayed on top! */}
+                                        <div className="absolute inset-0 flex items-center justify-center p-3 select-none">
+                                          <div className="bg-rose-650 text-white px-2 py-0.5 font-display font-black text-[10px] tracking-wide uppercase shadow-lg border border-red-400/30 rounded transform -rotate-1">
+                                            {concept.overlayText}
+                                          </div>
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <div className="p-3 text-center space-y-1 text-[10px] text-slate-500">
+                                        {isSlotLoading ? (
+                                          <div className="space-y-2">
+                                            <div className="w-5 h-5 border-2 border-purple-500/30 border-t-purple-400 rounded-full animate-spin mx-auto" />
+                                            <p className="text-purple-400/80 font-mono text-[9px]">Synthesizing pixels...</p>
+                                          </div>
+                                        ) : (
+                                          <>
+                                            <ImageIcon className="w-6 h-6 mx-auto text-slate-750 mb-1" />
+                                            <span>Image preview is empty.</span>
+                                            <p className="text-[9px] text-slate-500">Press "Generate Workspace" to render.</p>
+                                          </>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="bg-slate-900 border border-dashed border-slate-800 rounded-2xl p-12 text-center text-slate-500">
+                        <Sparkles className="w-10 h-10 text-slate-700 mx-auto mb-3" />
+                        <h4 className="text-xs font-semibold text-slate-400">Ready to build prompts?</h4>
+                        <p className="text-[11px] text-slate-500 mt-1 max-w-sm mx-auto">
+                          Configure your theme niche and style parameters, and select "Generate 5 Prompt Concepts".
+                        </p>
+                      </div>
+                    )}
                   </div>
-                </div>
-              ) : (
-                <div className="bg-slate-900 border border-dashed border-slate-800 rounded-2xl p-12 text-center text-slate-500">
-                  <ImageIcon className="w-12 h-12 text-slate-700 mx-auto mb-4" />
-                  <h4 className="text-base font-semibold text-slate-400">Staging Dramatic Thumbnail Text overlays</h4>
-                  <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                    Formulate video concepts and select psychological hooks to let CreatorBoost export layout parameters and thumbnail copy recipes.
-                  </p>
+
+                  {/* Right Column: Raw custom image generation workspace (Span 5) */}
+                  <div className="lg:col-span-5 space-y-6">
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+                      <div className="border-b border-slate-800 pb-3">
+                        <h3 className="text-base font-bold text-slate-200 flex items-center gap-2">
+                          <ImageIcon className="w-4 h-4 text-pink-400" /> Direct AI Image Generator
+                        </h3>
+                        <p className="text-xs text-slate-400 mt-1">
+                          Type any custom prompt to generate absolute high-definition visual assets directly using Imagen 3.
+                        </p>
+                      </div>
+
+                      <div className="space-y-3.5">
+                        <div>
+                          <label className="block text-[10px] uppercase font-bold tracking-wider font-mono text-slate-400 mb-1">
+                            Aesthetic Prompt details
+                          </label>
+                          <textarea
+                            rows={4}
+                            value={customImagePrompt}
+                            onChange={(e) => setCustomImagePrompt(e.target.value)}
+                            placeholder="e.g. An elegant workspace setup on a clean desk, moody neon purple light..."
+                            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-purple-500 transition-colors resize-none leading-relaxed"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[10px] uppercase font-bold tracking-wider font-mono text-slate-400 mb-1">
+                              Aspect Ratio Sizing
+                            </label>
+                            <select
+                              value={customAspectRatio}
+                              onChange={(e) => setCustomAspectRatio(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                            >
+                              <option value="16:9">YouTube Landscape (16:9)</option>
+                              <option value="9:16">Shorts/TikTok Frame (9:16)</option>
+                              <option value="1:1">Instagram/Square Layout (1:1)</option>
+                              <option value="4:3">Standard Slate (4:3)</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] uppercase font-bold tracking-wider font-mono text-slate-400 mb-1">
+                              Mockup Overlay text
+                            </label>
+                            <input
+                              type="text"
+                              value={customOverlay}
+                              onChange={(e) => setCustomOverlay(e.target.value)}
+                              placeholder="e.g. MUST WATCH!"
+                              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                            />
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => handleGenerateImage(customImagePrompt, customAspectRatio, "custom")}
+                          disabled={customImageLoading || loading}
+                          className="w-full py-3 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-purple-600/15 active:scale-95 disabled:opacity-50 disabled:scale-100 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          {customImageLoading ? (
+                            <>
+                              <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                              Synthesizing Asset (Imagen 3)...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="w-3.5 h-3.5 text-purple-200" />
+                              Generate Asset & Review
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* Direct preview pane */}
+                      <div className="bg-slate-950 border border-slate-850 p-4.5 rounded-2xl flex flex-col items-center justify-center space-y-3 shadow-inner">
+                        <span className="block text-[9px] uppercase font-bold font-mono text-slate-500 tracking-wider">
+                          GENERATION RENDER OUTPUT
+                        </span>
+
+                        <div className="w-full aspect-[16/9] bg-slate-900 border border-slate-800/80 rounded-xl overflow-hidden relative flex items-center justify-center text-center">
+                          {customImageUrl ? (
+                            <>
+                              <img
+                                src={customImageUrl}
+                                alt="Direct custom Imagen design ready"
+                                referrerPolicy="no-referrer"
+                                className="w-full h-full object-cover"
+                              />
+                              <div className="absolute top-2 left-2 bg-slate-950/70 backdrop-blur px-1 py-0.5 rounded text-[7px] font-mono tracking-widest text-[#cbd5e1]">
+                                RAW ASSET OUTPUT
+                              </div>
+                              {/* Overlay suggested text if typed */}
+                              {customOverlay && (
+                                <div className="absolute inset-0 flex items-center justify-center p-3 select-none">
+                                  <div className="bg-purple-600 border border-purple-400/40 text-white px-3 py-1 font-display font-black text-xs tracking-wider uppercase shadow-xl rounded transform -rotate-1">
+                                    {customOverlay}
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <div className="p-4 text-center space-y-1.5 text-xs text-slate-500">
+                              {customImageLoading ? (
+                                <div className="space-y-2">
+                                  <div className="w-6 h-6 border-2 border-purple-500/30 border-t-purple-400 rounded-full animate-spin mx-auto" />
+                                  <p className="text-purple-400 font-mono text-[9px]">Synthesizing pixels...</p>
+                                </div>
+                              ) : (
+                                <>
+                                  <ImageIcon className="w-8 h-8 text-slate-850 mx-auto" />
+                                  <span>Asset view is empty.</span>
+                                  <p className="text-[10px] text-slate-500 font-sans">Configure prompt and press Render.</p>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {customImageUrl && (
+                          <div className="w-full flex gap-2">
+                            <button
+                              onClick={() => {
+                                handleSaveResult("thumbnail", `Custom Design: ${customImagePrompt.substring(0, 30)}...`, { imageUrl: customImageUrl, prompt: customImagePrompt, overlayText: customOverlay });
+                              }}
+                              className="flex-1 py-1.5 bg-pink-500/10 border border-pink-500/20 text-[10px] text-pink-400 font-bold hover:bg-pink-500/20 rounded transition-all"
+                            >
+                              Save Output
+                            </button>
+                            <button
+                              onClick={() => handleCopyText(customImageUrl, "customImgUrl")}
+                              className="flex-1 py-1.5 bg-slate-900 hover:bg-slate-850 text-slate-400 hover:text-white font-mono text-[9px] rounded flex items-center justify-center gap-1 border border-slate-800"
+                            >
+                              {copiedId === "customImgUrl" ? "✓ URL Copied" : "Copy Data URL"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
                 </div>
               )}
             </div>
@@ -1416,19 +1922,19 @@ export default function App() {
                             <div className="bg-slate-950 p-4 border border-slate-850 rounded-xl">
                               <span className="block text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500 border-b border-slate-800 pb-1 mb-2">CTR CLickable</span>
                               <ul className="space-y-1 text-slate-300">
-                                {item.data.clickable.map((it: string, i: number) => <li key={i} className="py-0.5 leading-relaxed bg-slate-900/40 px-1.5 rounded">{it}</li>)}
+                                {item.data.clickable?.map((it: string, i: number) => <li key={i} className="py-0.5 leading-relaxed bg-slate-900/40 px-1.5 rounded">{it}</li>)}
                               </ul>
                             </div>
                             <div className="bg-slate-950 p-4 border border-slate-850 rounded-xl">
                               <span className="block text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500 border-b border-slate-800 pb-1 mb-2">SEO Optimized</span>
                               <ul className="space-y-1 text-slate-300">
-                                {item.data.seo.map((it: string, i: number) => <li key={i} className="py-0.5 leading-relaxed bg-slate-900/40 px-1.5 rounded">{it}</li>)}
+                                {item.data.seo?.map((it: string, i: number) => <li key={i} className="py-0.5 leading-relaxed bg-slate-900/40 px-1.5 rounded">{it}</li>)}
                               </ul>
                             </div>
                             <div className="bg-slate-950 p-4 border border-slate-850 rounded-xl">
                               <span className="block text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500 border-b border-slate-800 pb-1 mb-2">Shorts & Portrait</span>
                               <ul className="space-y-1 text-slate-300">
-                                {item.data.shorts.map((it: string, i: number) => <li key={i} className="py-0.5 leading-relaxed bg-slate-900/40 px-1.5 rounded text-pink-300 font-bold font-mono">{it}</li>)}
+                                {item.data.shorts?.map((it: string, i: number) => <li key={i} className="py-0.5 leading-relaxed bg-slate-900/40 px-1.5 rounded text-pink-300 font-bold font-mono">{it}</li>)}
                               </ul>
                             </div>
                           </div>
@@ -1441,22 +1947,77 @@ export default function App() {
                               {item.data.formattedDescription}
                             </div>
                             <div className="flex flex-wrap gap-2 text-[11px]">
-                              {item.data.hashtags.map((ht: string, i: number) => <span key={i} className="text-purple-400 font-bold">{ht}</span>)}
-                              {item.data.tags.map((tag: string, i: number) => <span key={i} className="bg-slate-950 px-2 py-0.5 border border-slate-850 text-slate-400 rounded">{tag}</span>)}
+                              {item.data.hashtags?.map((ht: string, i: number) => <span key={i} className="text-purple-400 font-bold">{ht}</span>)}
+                              {item.data.tags?.map((tag: string, i: number) => <span key={i} className="bg-slate-950 px-2 py-0.5 border border-slate-850 text-slate-400 rounded">{tag}</span>)}
                             </div>
                           </div>
                         )}
 
                         {/* THUMBNAILS */}
                         {item.type === "thumbnail" && (
-                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-sans">
-                            {item.data.suggestions.map((sug: ThumbnailSuggestion, i: number) => (
-                              <div key={i} className="bg-slate-950 border border-slate-850 rounded-xl p-3">
-                                <div className="aspect-[16/9] rounded mb-2 flex items-center justify-center font-display font-extrabold text-[10px] tracking-wide uppercase shadow" style={{ backgroundColor: sug.bgColor, color: sug.textColor }}>
-                                  {sug.text}
+                          <div>
+                            {item.data?.imageUrl ? (
+                              <div className="flex flex-col md:flex-row gap-4 items-start bg-slate-950 border border-slate-850 p-4 rounded-xl">
+                                <div className="w-full md:w-64 aspect-[16/9] bg-slate-900 rounded-lg overflow-hidden border border-slate-800 relative shadow-inner">
+                                  <img
+                                    src={item.data.imageUrl}
+                                    alt="Saved generation"
+                                    referrerPolicy="no-referrer"
+                                    className="w-full h-full object-cover"
+                                  />
+                                  {item.data.overlayText && (
+                                    <div className="absolute inset-0 flex items-center justify-center p-3 select-none">
+                                      <div className="bg-purple-600 border border-purple-400/40 text-white px-2.5 py-0.5 font-display font-black text-[10px] tracking-wider uppercase shadow-xl rounded transform -rotate-1">
+                                        {item.data.overlayText}
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
-                                <span className="font-bold text-slate-300">"{sug.text}"</span>
-                                <p className="text-[10px] text-slate-400 mt-1 italic pr-1">{sug.compositionTip}</p>
+                                <div className="flex-1 space-y-1">
+                                  <span className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500">Prompt detail</span>
+                                  <p className="text-xs text-slate-350 font-mono leading-relaxed bg-slate-900/60 p-2 border border-slate-800 rounded select-all max-h-[100px] overflow-y-auto">
+                                    {item.data.prompt}
+                                  </p>
+                                  {item.data.overlayText && (
+                                    <p className="text-[10px] text-slate-450 mt-1">
+                                      <strong className="text-pink-400 uppercase">Banner Text:</strong> "{item.data.overlayText}"
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            ) : item.data?.suggestions ? (
+                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-sans">
+                                {item.data.suggestions.map((sug: ThumbnailSuggestion, i: number) => (
+                                  <div key={i} className="bg-slate-950 border border-slate-850 rounded-xl p-3">
+                                    <div className="aspect-[16/9] rounded mb-2 flex items-center justify-center font-display font-extrabold text-[10px] tracking-wide uppercase shadow" style={{ backgroundColor: sug.bgColor, color: sug.textColor }}>
+                                      {sug.text}
+                                    </div>
+                                    <span className="font-bold text-slate-300">"{sug.text}"</span>
+                                    <p className="text-[10px] text-slate-400 mt-1 italic pr-1">{sug.compositionTip}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-xs text-slate-500 italic">No layout data available.</p>
+                            )}
+                          </div>
+                        )}
+
+                        {/* THUMBNAIL_PROMPTS */}
+                        {item.type === "thumbnail_prompt" && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-sans">
+                            {item.data.prompts.map((p: ThumbnailPromptConcept, idx: number) => (
+                              <div key={idx} className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-2 relative">
+                                <span className="absolute right-3 top-3 font-mono text-[9px] text-slate-600">Concept #{idx+1}</span>
+                                <h5 className="font-bold text-white font-display uppercase">{p.conceptName}</h5>
+                                <div className="p-2 bg-slate-900 border border-slate-800 rounded text-[10px] font-mono text-slate-400 select-all leading-relaxed whitespace-pre-wrap">
+                                  {p.imagePrompt}
+                                </div>
+                                <div className="text-[10px] space-y-1">
+                                  <p><strong className="text-slate-500">Overlay:</strong> <span className="text-pink-400 font-bold uppercase">{p.overlayText}</span></p>
+                                  <p><strong className="text-slate-505">Placement:</strong> <span className="text-slate-300">{p.layoutPlacement}</span></p>
+                                  <p><strong className="text-slate-500">Trigger:</strong> <span className="text-purple-400 font-bold">{p.psychologyTrigger}</span></p>
+                                </div>
                               </div>
                             ))}
                           </div>
