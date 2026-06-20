@@ -1,0 +1,6 @@
+{
+  "name": "CreatorBoost AI",
+  "description": "An AI assistant for YouTubers, Shorts creators, and musicians to generate viral video ideas, titles, descriptions, thumbnail text, scripts, and trends.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

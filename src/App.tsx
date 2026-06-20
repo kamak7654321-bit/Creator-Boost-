@@ -1,0 +1,1665 @@
+import React, { useState, useEffect } from "react";
+import {
+  Lightbulb,
+  Subtitles,
+  FileText,
+  FileCode,
+  Image as ImageIcon,
+  TrendingUp,
+  Heart,
+  CreditCard,
+  Target,
+  Sparkles,
+  Copy,
+  Check,
+  Trash2,
+  Bookmark,
+  BookmarkCheck,
+  Send,
+  HelpCircle,
+  Clock,
+  ExternalLink,
+  ChevronRight,
+  Flame,
+  Volume2,
+  Video,
+  Info,
+  DollarSign,
+  AlertCircle
+} from "lucide-react";
+import Header from "./components/Header";
+import Sidebar from "./components/Sidebar";
+import {
+  SavedItem,
+  VideoIdea,
+  IdeaPayload,
+  TitlePayload,
+  DescriptionPayload,
+  ThumbnailSuggestion,
+  ThumbnailPayload,
+  ScriptSection,
+  ScriptPayload,
+  TrendItem,
+  TrendPayload,
+} from "./types";
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState<string>("idea");
+  
+  // Storage for daily limits & pro status (stored in localStorage)
+  const [generationsCount, setGenerationsCount] = useState<number>(0);
+  const [isPro, setIsPro] = useState<boolean>(false);
+  const maxGenerations = isPro ? 99999 : 10;
+
+  // Saved workspace items list (stored in localStorage)
+  const [savedItems, setSavedItems] = useState<SavedItem[]>([]);
+
+  // Clipboard success state (maps item index/ID to true/false)
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // Form Inputs State
+  // 1. Idea Gen
+  const [ideaNiche, setIdeaNiche] = useState<string>("Tech & AI Reviews");
+  const [ideaTopic, setIdeaTopic] = useState<string>("ChatGPT & Future of Coding");
+  // 2. Title Gen
+  const [titleTopic, setTitleTopic] = useState<string>("Why AI will not replace junior programmers");
+  const [titleTone, setTitleTone] = useState<string>("Dramatic Curiosity");
+  // 3. Description Gen
+  const [descTopic, setDescTopic] = useState<string>("Photoshop Generative Fill Tutorial");
+  const [descTitle, setDescTitle] = useState<string>("Unlocking ALL Hidden Features in Photoshop AI!");
+  const [descOutline, setDescOutline] = useState<string>("First 3 mins cover setup, then live sky substitution, final section gives golden shortcuts rules.");
+  // 4. Thumbnail Text Gen
+  const [thumbTopic, setThumbTopic] = useState<string>("Quitting coding at age 21");
+  const [thumbEmotion, setThumbEmotion] = useState<string>("Shock & Relief");
+  // 5. Script Gen
+  const [scriptTitle, setScriptTitle] = useState<string>("The Secret iPad Hack Apple Forgot to Tell You");
+  const [scriptFormat, setScriptFormat] = useState<"shorts" | "long-form">("shorts");
+  const [scriptTone, setScriptTone] = useState<string>("Engaging Hype");
+  // 6. Trend Tracker
+  const [trendCategory, setTrendCategory] = useState<string>("Finance & Crypto");
+  const [trendPlatform, setTrendPlatform] = useState<string>("youtube");
+
+  // Output Results State
+  const [ideaResult, setIdeaResult] = useState<IdeaPayload | null>(null);
+  const [titleResult, setTitleResult] = useState<TitlePayload | null>(null);
+  const [descResult, setDescResult] = useState<DescriptionPayload | null>(null);
+  const [thumbResult, setThumbResult] = useState<ThumbnailPayload | null>(null);
+  const [scriptResult, setScriptResult] = useState<ScriptPayload | null>(null);
+  const [trendResult, setTrendPayload] = useState<TrendPayload | null>(null);
+
+  // Loading indicator states
+  const [loading, setLoading] = useState<boolean>(false);
+  const [errorText, setErrorText] = useState<string | null>(null);
+
+  // Load from localStorage on initialization
+  useEffect(() => {
+    const cachedCount = localStorage.getItem("cb_generations_count");
+    if (cachedCount) setGenerationsCount(parseInt(cachedCount, 10));
+
+    const cachedPro = localStorage.getItem("cb_is_pro");
+    if (cachedPro) setIsPro(cachedPro === "true");
+
+    const cachedSaves = localStorage.getItem("cb_saved_items");
+    if (cachedSaves) {
+      try {
+        setSavedItems(JSON.parse(cachedSaves));
+      } catch (e) {
+        console.error("Failed to parse saved items:", e);
+      }
+    }
+  }, []);
+
+  // Update localStorage when savings / metrics change
+  const saveToLocal = (newCount: number) => {
+    setGenerationsCount(newCount);
+    localStorage.setItem("cb_generations_count", newCount.toString());
+  };
+
+  const handleSetPro = (status: boolean) => {
+    setIsPro(status);
+    localStorage.setItem("cb_is_pro", status ? "true" : "false");
+  };
+
+  const updateSaves = (items: SavedItem[]) => {
+    setSavedItems(items);
+    localStorage.setItem("cb_saved_items", JSON.stringify(items));
+  };
+
+  // Quick action: copy text
+  const handleCopyText = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  // Toggle saving custom content
+  const handleSaveResult = (type: SavedItem["type"], title: string, data: any) => {
+    const newItem: SavedItem = {
+      id: `${type}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      type,
+      title,
+      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + " (" + new Date().toLocaleDateString([], { month: "short", day: "numeric" }) + ")",
+      data,
+    };
+    const updated = [newItem, ...savedItems];
+    updateSaves(updated);
+  };
+
+  const handleRemoveSaved = (id: string) => {
+    const updated = savedItems.filter((it) => it.id !== id);
+    updateSaves(updated);
+  };
+
+  // Core API Submission Handler
+  const handleGenerate = async (type: string) => {
+    // Check local limit first
+    if (generationsCount >= maxGenerations) {
+      setErrorText(`Daily Limit Reached. You have used all ${maxGenerations} generations. Upgrade to Premium for unlimited queries!`);
+      setActiveTab("pricing");
+      return;
+    }
+
+    setLoading(true);
+    setErrorText(null);
+
+    let params: any = {};
+    if (type === "idea") params = { niche: ideaNiche, topic: ideaTopic };
+    else if (type === "title") params = { topic: titleTopic, tone: titleTone };
+    else if (type === "description") params = { topic: descTopic, title: descTitle, corePoints: descOutline };
+    else if (type === "thumbnail") params = { topic: thumbTopic, emotion: thumbEmotion };
+    else if (type === "script") params = { title: scriptTitle, format: scriptFormat, tone: scriptTone };
+    else if (type === "trend") params = { category: trendCategory, platform: trendPlatform };
+
+    try {
+      const response = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ toolType: type, params }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Generation request failed");
+      }
+
+      const responseData = await response.json();
+
+      // Render respective output state
+      if (type === "idea") {
+        setIdeaResult({ niche: ideaNiche, topic: ideaTopic, ideas: responseData.ideas });
+      } else if (type === "title") {
+        setTitleResult({
+          topic: titleTopic,
+          tone: titleTone,
+          clickable: responseData.clickable,
+          seo: responseData.seo,
+          shorts: responseData.shorts,
+        });
+      } else if (type === "description") {
+        setDescResult({
+          topic: descTopic,
+          title: descTitle,
+          corePoints: descOutline,
+          formattedDescription: responseData.formattedDescription,
+          tags: responseData.tags,
+          hashtags: responseData.hashtags,
+        });
+      } else if (type === "thumbnail") {
+        setThumbResult({
+          topic: thumbTopic,
+          emotion: thumbEmotion,
+          suggestions: responseData.suggestions,
+        });
+      } else if (type === "script") {
+        setScriptResult({
+          title: scriptTitle,
+          format: scriptFormat,
+          tone: scriptTone,
+          hookVisual: responseData.hookVisual,
+          hookAudio: responseData.hookAudio,
+          sections: responseData.sections,
+          ctaVisual: responseData.ctaVisual,
+          ctaSpoken: responseData.ctaSpoken,
+        });
+      } else if (type === "trend") {
+        setTrendPayload({
+          category: trendCategory,
+          platform: trendPlatform,
+          trends: responseData.trends,
+        });
+      }
+
+      // Increment limits count
+      saveToLocal(generationsCount + 1);
+    } catch (err: any) {
+      console.error(err);
+      setErrorText(err.message || "Something went wrong while compiling suggestions. Please check your network and API credentials.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResetDailyCredits = () => {
+    saveToLocal(0);
+    setErrorText(null);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 font-sans text-slate-100 selection:bg-purple-500/30 selection:text-white flex flex-col">
+      
+      {/* Header Metric Bar */}
+      <Header
+        generationCount={generationsCount}
+        maxGenerations={maxGenerations}
+        savedCount={savedItems.length}
+        onResetCredits={handleResetDailyCredits}
+        onViewPricing={() => setActiveTab("pricing")}
+      />
+
+      {/* Main Container */}
+      <div className="flex-1 flex flex-col lg:flex-row">
+        
+        {/* Left Navigation Sidebar */}
+        <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} savedCount={savedItems.length} />
+
+        {/* Right workspace core content */}
+        <main className="flex-1 p-6 lg:p-8 overflow-y-auto max-w-7xl mx-auto w-full">
+          
+          {/* Global Alert Notification block */}
+          {errorText && (
+            <div className="bg-rose-950/40 border border-rose-500/30 rounded-2xl p-4 mb-6 flex gap-3 text-sm text-rose-200">
+              <AlertCircle className="w-5 h-5 shrink-0 text-rose-400 mt-0.5" />
+              <div className="flex-1">
+                <span className="font-bold">Execution Error: </span> {errorText}
+              </div>
+              <button
+                onClick={() => setErrorText(null)}
+                className="text-xs uppercase font-mono px-2 py-1 bg-rose-500/10 hover:bg-rose-500/20 rounded border border-rose-500/20 text-rose-300 self-start transition-colors"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {/* Active Work Flow */}
+
+          {/* 1. VIDEO IDEA GENERATOR */}
+          {activeTab === "idea" && (
+            <div className="space-y-6">
+              {/* Tool Pitch Header */}
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="p-1 px-2.5 font-mono text-[10px] uppercase font-bold tracking-widest text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded-full">
+                    Viral Algorithm Engine
+                  </span>
+                </div>
+                <h2 className="text-3xl font-bold font-display tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
+                  Video Idea Generator
+                </h2>
+                <p className="text-sm text-slate-400 mt-1 max-w-2xl">
+                  Generate exactly 20 hyper-targeted, high-retention video angles. Complete with target audiences, psychological triggers, and pacing tips.
+                </p>
+              </div>
+
+              {/* Form Input Deck */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+                  <div>
+                    <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
+                      Your Niche / Sector
+                    </label>
+                    <input
+                      type="text"
+                      value={ideaNiche}
+                      onChange={(e) => setIdeaNiche(e.target.value)}
+                      placeholder="e.g. Cooking, Finance, Indie Game Dev"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
+                      Topic Angle / Keyword Focus
+                    </label>
+                    <input
+                      type="text"
+                      value={ideaTopic}
+                      onChange={(e) => setIdeaTopic(e.target.value)}
+                      placeholder="e.g. Budget travel in Tokyo, Minecraft speedrun"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between border-t border-slate-800/60 pt-4 flex-wrap gap-3">
+                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                    <Info className="w-4 h-4 text-slate-500" />
+                    <span>Uses 1 daily generation credit.</span>
+                  </div>
+                  <button
+                    onClick={() => handleGenerate("idea")}
+                    disabled={loading}
+                    className="px-6 py-3 bg-purple-600 hover:bg-purple-500 active:scale-95 disabled:opacity-50 disabled:scale-100 text-sm font-semibold text-white rounded-xl shadow-lg shadow-purple-600/10 transition-all flex items-center gap-2"
+                  >
+                    {loading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Analyzing YouTube Analytics...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4 text-purple-200" />
+                        Generate 20 Viral Ideas
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Ideas Output display */}
+              {ideaResult ? (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-lg font-bold font-display text-slate-200">
+                        Top Suggested Concepts for "{ideaResult.niche}"
+                      </h3>
+                      <p className="text-xs text-slate-400">Focused on: {ideaResult.topic}</p>
+                    </div>
+                    <button
+                      onClick={() => handleSaveResult("idea", `Ideas: ${ideaResult.niche} (${ideaResult.topic})`, ideaResult)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-pink-500/10 border border-pink-500/20 text-xs font-semibold text-pink-400 hover:bg-pink-500/25 active:scale-95 transition-all rounded-lg"
+                    >
+                      <Bookmark className="w-3.5 h-3.5" /> Save to Workspace
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {ideaResult.ideas.map((idea, index) => (
+                      <div
+                        key={idea.id || index}
+                        className="bg-slate-900 border border-slate-800 rounded-xl p-5 hover:border-slate-700 transition-all shadow-inner relative group"
+                      >
+                        {/* Index Indicator tag */}
+                        <div className="absolute right-4 top-4 font-mono text-xs font-bold text-slate-600">
+                          #{String(index + 1).padStart(2, '0')}
+                        </div>
+
+                        <div className="flex items-center gap-1 bg-amber-400/10 px-2 py-0.5 border border-amber-400/20 text-[10px] font-bold text-amber-400 font-mono rounded w-fit mb-3">
+                          <Flame className="w-3 h-3" /> RETENTION EXPECTANCY: {idea.estimatedRetention || "90%+"}
+                        </div>
+
+                        <h4 className="text-base font-bold font-display text-white pr-8 group-hover:text-purple-300 transition-colors">
+                          {idea.title}
+                        </h4>
+
+                        <div className="space-y-2 mt-3 text-xs border-t border-slate-800/80 pt-3">
+                          <div>
+                            <span className="text-slate-500 font-medium">Clickbait Target Hook:</span>
+                            <p className="text-slate-300 mt-0.5 font-sans leading-relaxed">{idea.angle}</p>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 font-medium">Core Target Audience:</span>
+                            <p className="text-slate-400 mt-0.5">{idea.targetAudience}</p>
+                          </div>
+                          <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-850 mt-1">
+                            <span className="text-[10px] uppercase font-bold tracking-wider font-mono text-purple-400 block mb-0.5">Visual Staging Hint</span>
+                            <p className="text-slate-300 font-sans italic text-[11px] leading-relaxed">{idea.pacingTip}</p>
+                          </div>
+                        </div>
+
+                        <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-slate-800/60 opacity-60 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => handleCopyText(`Title: ${idea.title}\nAngle: ${idea.angle}\nTarget: ${idea.targetAudience}`, `idea-${index}`)}
+                            className="p-1 px-2.5 transition-colors bg-slate-950 text-[11px] font-mono text-slate-400 hover:text-white rounded-md border border-slate-800 flex items-center gap-1"
+                          >
+                            {copiedId === `idea-${index}` ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-400" /> Copied!
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3" /> Quick Copy
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-slate-900 border border-dashed border-slate-800 rounded-2xl p-12 text-center text-slate-500">
+                  <Lightbulb className="w-12 h-12 text-slate-700 mx-auto mb-4" />
+                  <h4 className="text-base font-semibold text-slate-400">Ready to boost your YouTube views?</h4>
+                  <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                    Configure your target Channel Niche above and prompt the video generator for instant micro-optimized video concepts.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 2. TITLE GENERATOR */}
+          {activeTab === "title" && (
+            <div className="space-y-6">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="p-1 px-2.5 font-mono text-[10px] uppercase font-bold tracking-widest text-blue-400 bg-blue-400/10 border border-blue-400/20 rounded-full">
+                    A/B CTR Performance Testing
+                  </span>
+                </div>
+                <h2 className="text-3xl font-bold font-display tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
+                  A/B CTR Title Generator
+                </h2>
+                <p className="text-sm text-slate-400 mt-1 max-w-2xl">
+                  Generate clickable intrigue titles, high search-volume SEO hooks, and super punchy vertical frame Shorts titles.
+                </p>
+              </div>
+
+              {/* Title Generator Input */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+                  <div>
+                    <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
+                      Core Video Theme / Topic
+                    </label>
+                    <input
+                      type="text"
+                      value={titleTopic}
+                      onChange={(e) => setTitleTopic(e.target.value)}
+                      placeholder="e.g. Secret coding hacks for Mac"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
+                      Aesthetic Mood & Tone Tone
+                    </label>
+                    <select
+                      value={titleTone}
+                      onChange={(e) => setTitleTone(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                    >
+                      <option value="Shocking Curiosity">Shocking Curiosity ("They lied to us")</option>
+                      <option value="Scientific Authority">Scientific & Fact-based ("Proven by Science")</option>
+                      <option value="Extremely Hype / Enthusiastic">Extremely Hype / High Energy</option>
+                      <option value="Fear of Missing Out">FOMO / Urgency ("Stop doing this NOW")</option>
+                      <option value="Minimalist / Lowkey">Minimal / Elegant ("How I learned to code")</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between border-t border-slate-800/60 pt-4 flex-wrap gap-3">
+                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                    <Info className="w-4 h-4 text-slate-500" />
+                    <span>Generates exactly 30 unique variations.</span>
+                  </div>
+                  <button
+                    onClick={() => handleGenerate("title")}
+                    disabled={loading}
+                    className="px-6 py-3 bg-purple-600 hover:bg-purple-500 active:scale-95 disabled:opacity-50 disabled:scale-100 text-sm font-semibold text-white rounded-xl shadow-lg shadow-purple-600/10 transition-all flex items-center gap-2"
+                  >
+                    {loading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Analyzing CTR Benchmarks...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4 text-purple-200" />
+                        Generate 30 High CTR Titles
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Title result outputs */}
+              {titleResult ? (
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-lg font-bold font-display text-slate-200">
+                        Viral Titles Generated
+                      </h3>
+                      <p className="text-xs text-slate-400">Tone configuration: {titleResult.tone}</p>
+                    </div>
+                    <button
+                      onClick={() => handleSaveResult("title", `Titles: ${titleResult.topic}`, titleResult)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-pink-500/10 border border-pink-500/20 text-xs font-semibold text-pink-400 hover:bg-pink-500/25 active:scale-95 transition-all rounded-lg"
+                    >
+                      <Bookmark className="w-3.5 h-3.5" /> Save Suite to Workspace
+                    </button>
+                  </div>
+
+                  {/* Dynamic side-by-side Bento layout */}
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    {/* Clickable Section */}
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col">
+                      <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-800">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-lg shadow-blue-500/60" />
+                          <span className="font-display font-bold text-sm text-slate-200">Intrigue & Clickable</span>
+                        </div>
+                        <span className="font-mono text-[10px] text-slate-500 font-bold">10 COPIES</span>
+                      </div>
+                      
+                      <div className="space-y-2 flex-1">
+                        {titleResult.clickable.map((title, i) => (
+                          <div
+                            key={i}
+                            className="bg-slate-950/60 hover:bg-slate-950 border border-slate-850 hover:border-slate-800 p-3 rounded-xl flex items-center justify-between gap-3 group transition-all"
+                          >
+                            <span className="text-xs leading-relaxed text-slate-300 font-sans">{title}</span>
+                            <button
+                              onClick={() => handleCopyText(title, `click-${i}`)}
+                              className="p-1.5 bg-slate-900 border border-slate-800 text-slate-400 hover:text-white rounded-lg transition-colors shrink-0 opacity-0 group-hover:opacity-100"
+                              title="Copy title"
+                            >
+                              {copiedId === `click-${i}` ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* SEO Section */}
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col">
+                      <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-800">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-lg shadow-emerald-500/60" />
+                          <span className="font-display font-bold text-sm text-slate-200">SEO & Keyword Rich</span>
+                        </div>
+                        <span className="font-mono text-[10px] text-slate-500 font-bold">10 COPIES</span>
+                      </div>
+
+                      <div className="space-y-2 flex-1">
+                        {titleResult.seo.map((title, i) => (
+                          <div
+                            key={i}
+                            className="bg-slate-950/60 hover:bg-slate-950 border border-slate-850 hover:border-slate-800 p-3 rounded-xl flex items-center justify-between gap-3 group transition-all"
+                          >
+                            <span className="text-xs leading-relaxed text-slate-300 font-sans">{title}</span>
+                            <button
+                              onClick={() => handleCopyText(title, `seo-${i}`)}
+                              className="p-1.5 bg-slate-900 border border-slate-800 text-slate-400 hover:text-white rounded-lg transition-colors shrink-0 opacity-0 group-hover:opacity-100"
+                              title="Copy title"
+                            >
+                              {copiedId === `seo-${i}` ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Shorts Section */}
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col">
+                      <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-800">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2.5 h-2.5 rounded-full bg-pink-500 shadow-lg shadow-pink-500/60" />
+                          <span className="font-display font-bold text-sm text-slate-200">Shorts & TikTok Titles</span>
+                        </div>
+                        <span className="font-mono text-[10px] text-slate-500 font-bold">10 COPIES</span>
+                      </div>
+
+                      <div className="space-y-2 flex-1">
+                        {titleResult.shorts.map((title, i) => (
+                          <div
+                            key={i}
+                            className="bg-slate-950/60 hover:bg-slate-950 border border-slate-850 hover:border-slate-800 p-3 rounded-xl flex items-center justify-between gap-3 group transition-all"
+                          >
+                            <span className="text-xs leading-relaxed font-bold font-mono text-pink-300">{title}</span>
+                            <button
+                              onClick={() => handleCopyText(title, `short-${i}`)}
+                              className="p-1.5 bg-slate-900 border border-slate-800 text-slate-400 hover:text-white rounded-lg transition-colors shrink-0 opacity-0 group-hover:opacity-100"
+                              title="Copy title"
+                            >
+                              {copiedId === `short-${i}` ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-slate-900 border border-dashed border-slate-800 rounded-2xl p-12 text-center text-slate-500">
+                  <Subtitles className="w-12 h-12 text-slate-700 mx-auto mb-4" />
+                  <h4 className="text-base font-semibold text-slate-400">Generate High CTR Video Titles</h4>
+                  <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                    Type in your topic idea and select a viral tone to let CreatorBoost output 30 highly optimized headline suggestions.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 3. DESCRIPTION GENERATOR */}
+          {activeTab === "description" && (
+            <div className="space-y-6">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="p-1 px-2.5 font-mono text-[10px] uppercase font-bold tracking-widest text-emerald-400 bg-emerald-400/10 border border-emerald-400/20 rounded-full">
+                    Advanced Metadata Optimizer
+                  </span>
+                </div>
+                <h2 className="text-3xl font-bold font-display tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
+                  Description & SEO Tag Suite
+                </h2>
+                <p className="text-sm text-slate-400 mt-1 max-w-2xl">
+                  Build complete algorithm-compliant text outlines with chapter timelines, metadata keywords, CTAs, and relevant hashtags.
+                </p>
+              </div>
+
+              {/* Input section */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
+                      Chosen Video Title
+                    </label>
+                    <input
+                      type="text"
+                      value={descTitle}
+                      onChange={(e) => setDescTitle(e.target.value)}
+                      placeholder="e.g. 5 Coding Tricks That Save Programmers Hours"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
+                      Video Theme Keyword
+                    </label>
+                    <input
+                      type="text"
+                      value={descTopic}
+                      onChange={(e) => setDescTopic(e.target.value)}
+                      placeholder="e.g. Programming habits & efficiency tricks"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                    />
+                  </div>
+                </div>
+
+                <div className="mb-5">
+                  <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
+                    Describe core outline/chapters points (Optional)
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={descOutline}
+                    onChange={(e) => setDescOutline(e.target.value)}
+                    placeholder="Briefly state key sections: (e.g. Intro, Setup guide, live demonstration, Pro tip, final call to actions)"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors resize-none"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between border-t border-slate-800/60 pt-4 flex-wrap gap-3">
+                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                    <Info className="w-4 h-4 text-slate-500" />
+                    <span>Sets up perfect algorithm keywords ranking pointers.</span>
+                  </div>
+                  <button
+                    onClick={() => handleGenerate("description")}
+                    disabled={loading}
+                    className="px-6 py-3 bg-purple-600 hover:bg-purple-500 active:scale-95 disabled:opacity-50 disabled:scale-100 text-sm font-semibold text-white rounded-xl shadow-lg shadow-purple-600/10 transition-all flex items-center gap-2"
+                  >
+                    {loading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Structuring Metadata Tags...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4 text-purple-200" />
+                        Generate Metadata Package
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Output view */}
+              {descResult ? (
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-lg font-bold font-display text-slate-200">
+                        Generated Descriptions Suite
+                      </h3>
+                      <p className="text-xs text-slate-400">Title optimized: {descResult.title}</p>
+                    </div>
+                    <button
+                      onClick={() => handleSaveResult("description", `Desc: ${descResult.title}`, descResult)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-pink-500/10 border border-pink-500/20 text-xs font-semibold text-pink-400 hover:bg-pink-500/25 active:scale-95 transition-all rounded-lg"
+                    >
+                      <Bookmark className="w-3.5 h-3.5" /> Save Output to Workspace
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    {/* Left 2 cols: Main description text */}
+                    <div className="lg:col-span-2 space-y-4">
+                      <div className="bg-slate-900 border border-slate-850 p-6 rounded-2xl shadow-lg relative">
+                        <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+                          <span className="font-display font-bold text-sm text-slate-200">Formatted Description Copy Block</span>
+                          <button
+                            onClick={() => handleCopyText(descResult.formattedDescription, "descText")}
+                            className="p-1.5 px-3 transition-all bg-slate-950 font-mono text-xs text-slate-400 hover:text-white rounded-lg border border-slate-800 flex items-center gap-1"
+                          >
+                            {copiedId === "descText" ? (
+                              <>
+                                <Check className="w-3.5 h-3.5 text-emerald-400" /> Copied Descriptions!
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3.5 h-3.5" /> Copy Entire Block
+                              </>
+                            )}
+                          </button>
+                        </div>
+
+                        {/* Description Box */}
+                        <div className="bg-slate-950 p-4 border border-slate-800 rounded-xl max-h-[360px] overflow-y-auto">
+                          <pre className="text-xs text-slate-300 font-mono leading-relaxed whitespace-pre-wrap select-all">
+                            {descResult.formattedDescription}
+                          </pre>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right col: SEO Tag items & Hashtags */}
+                    <div className="space-y-6">
+                      {/* Hashtags Card */}
+                      <div className="bg-slate-900 border border-slate-850 rounded-2xl p-5 shadow-lg">
+                        <span className="block text-xs uppercase font-mono font-bold text-slate-500 tracking-wider mb-3">
+                          Short-form Hashtags
+                        </span>
+                        <div className="flex flex-wrap gap-2">
+                          {descResult.hashtags.map((ht, i) => (
+                            <span
+                              key={i}
+                              className="text-xs font-mono font-bold text-purple-400 bg-purple-500/10 border border-purple-500/20 px-2.5 py-1 rounded-lg cursor-pointer hover:bg-purple-500/25 transition-colors"
+                              onClick={() => handleCopyText(ht, `ht-${i}`)}
+                              title="Click to copy hashtag"
+                            >
+                              {copiedId === `ht-${i}` ? "✓ Saved" : ht}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* SEO Search Tags / Keywords */}
+                      <div className="bg-slate-900 border border-slate-850 rounded-2xl p-5 shadow-lg">
+                        <div className="flex items-center justify-between mb-3 border-b border-slate-850 pb-2">
+                          <span className="block text-xs uppercase font-mono font-bold text-slate-500 tracking-wider">
+                            YouTube Search Keywords
+                          </span>
+                          <button
+                            onClick={() => handleCopyText(descResult.tags.join(", "), "descAllTags")}
+                            className="text-[10px] uppercase font-mono text-purple-400 hover:text-purple-300"
+                          >
+                            {copiedId === "descAllTags" ? "Copied All!" : "Copy CSV"}
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {descResult.tags.map((tag, i) => (
+                            <span
+                              key={i}
+                              className="text-[11px] text-slate-300 bg-slate-950 border border-slate-800 px-2 py-1 rounded"
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-slate-900 border border-dashed border-slate-800 rounded-2xl p-12 text-center text-slate-500">
+                  <FileText className="w-12 h-12 text-slate-700 mx-auto mb-4" />
+                  <h4 className="text-base font-semibold text-slate-400">Generate Structured Description Panels</h4>
+                  <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                    Fill out target video structures and prompt the engine to format custom Timestamps and algorithmic chapters ready to publish.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 4. THUMBNAIL TEXT GENERATOR */}
+          {activeTab === "thumbnail" && (
+            <div className="space-y-6">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="p-1 px-2.5 font-mono text-[10px] uppercase font-bold tracking-widest text-pink-400 bg-pink-400/10 border border-pink-400/20 rounded-full">
+                    Visually Clickable Framing Hook
+                  </span>
+                </div>
+                <h2 className="text-3xl font-bold font-display tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
+                  Thumbnail Text & Canvas Layout Generator
+                </h2>
+                <p className="text-sm text-slate-400 mt-1 max-w-2xl">
+                  Generate ultra-short dramatic thumbnail texts. High contrast layout recipes matching user visual psychological tricks.
+                </p>
+              </div>
+
+              {/* Inputs */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+                  <div>
+                    <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
+                      Video Theme / Drama Point
+                    </label>
+                    <input
+                      type="text"
+                      value={thumbTopic}
+                      onChange={(e) => setThumbTopic(e.target.value)}
+                      placeholder="e.g. Learning to use Photoshop on vintage PC"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
+                      Target Psychological Trigger Emotion
+                    </label>
+                    <select
+                      value={thumbEmotion}
+                      onChange={(e) => setThumbEmotion(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                    >
+                      <option value="Shocking Urgency / Panic">Shocking Urgency / Panic ("NEVER DO THIS")</option>
+                      <option value="Intense Curiosity">Intense Curiosity ("HE EXPOSED EVERYTHING")</option>
+                      <option value="Absolute Disbelief">Absolute Disbelief ("IT ACTUALLY WORKED?")</option>
+                      <option value="Joyful Discovery">Joyful Discovery ("BEST HACK EVER")</option>
+                      <option value="Skeptical Warning">Skeptical Warning ("THEY LIED TO YOU")</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between border-t border-slate-800/60 pt-4 flex-wrap gap-3">
+                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                    <Info className="w-4 h-4 text-slate-500" />
+                    <span>Returns exactly 8 contrasting text suggestions.</span>
+                  </div>
+                  <button
+                    onClick={() => handleGenerate("thumbnail")}
+                    disabled={loading}
+                    className="px-6 py-3 bg-purple-600 hover:bg-purple-500 active:scale-95 disabled:opacity-50 disabled:scale-100 text-sm font-semibold text-white rounded-xl shadow-lg shadow-purple-600/10 transition-all flex items-center gap-2"
+                  >
+                    {loading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Generating Composition Layouts...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4 text-purple-200" />
+                        Generate Thumbnail Recipe
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Output Display */}
+              {thumbResult ? (
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <div>
+                      <h3 className="text-xl font-bold font-display text-slate-200">
+                        8 Shocking Overlay Recipies
+                      </h3>
+                      <p className="text-xs text-slate-400">Based on: "{thumbResult.topic}" with emotion "{thumbResult.emotion}"</p>
+                    </div>
+                    <button
+                      onClick={() => handleSaveResult("thumbnail", `Thumbnail Layouts: ${thumbResult.topic}`, thumbResult)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-pink-500/10 border border-pink-500/20 text-xs font-semibold text-pink-400 hover:bg-pink-500/25 active:scale-95 transition-all rounded-lg"
+                    >
+                      <Bookmark className="w-3.5 h-3.5" /> Save Suite
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    {thumbResult.suggestions.map((sug, i) => (
+                      <div
+                        key={i}
+                        className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl overflow-hidden p-0 flex flex-col group transition-all"
+                      >
+                        {/* Simulation Screen Container mimicking actual physical Youtube frame */}
+                        <div className="aspect-[16/9] bg-slate-950 relative flex items-center justify-center p-4 border-b border-slate-800/80 shadow-inner group-hover:bg-black transition-colors">
+                          <div className="absolute top-2 left-2 bg-black/60 backdrop-blur px-1.5 py-0.5 rounded text-[8px] font-mono tracking-widest text-slate-400 z-10">
+                            16:9 PREVIEW SIMULATION
+                          </div>
+                          
+                          {/* Live Thumbnail Overlay styling preview dynamically! */}
+                          <div
+                            className="px-3 py-1.5 font-display font-extrabold text-xs tracking-wider uppercase rounded-md shadow-xl text-center transform -rotate-2 select-none"
+                            style={{
+                              backgroundColor: sug.bgColor || "#F43F5E",
+                              color: sug.textColor || "#FFFFFF"
+                            }}
+                          >
+                            {sug.text}
+                          </div>
+                        </div>
+
+                        {/* Staging text detail notes */}
+                        <div className="p-4 flex-1 flex flex-col justify-between">
+                          <div className="space-y-2">
+                            <span className="font-mono text-[9px] uppercase font-bold text-slate-500 tracking-wider">
+                              Overlay Config
+                            </span>
+                            <p className="text-sm font-black text-slate-200 uppercase tracking-tight">
+                              "{sug.text}"
+                            </p>
+                            <p className="text-xs text-slate-400 italic">
+                              <span className="font-bold not-italic font-mono text-[10px] text-purple-400">Composition Strategy:</span> {sug.compositionTip}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center justify-between border-t border-slate-800 pt-3 mt-4">
+                            <span className="text-[10px] text-slate-500">Emotion: {sug.emotiveness}</span>
+                            <button
+                              onClick={() => handleCopyText(`Text: "${sug.text}"\nTip: ${sug.compositionTip}`, `thumb-${i}`)}
+                              className="text-xs text-purple-400 hover:text-purple-300 font-mono font-medium flex items-center gap-1"
+                            >
+                              {copiedId === `thumb-${i}` ? <Check className="w-3 h-3 text-emerald-400" /> : "Copy Text"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-slate-900 border border-dashed border-slate-800 rounded-2xl p-12 text-center text-slate-500">
+                  <ImageIcon className="w-12 h-12 text-slate-700 mx-auto mb-4" />
+                  <h4 className="text-base font-semibold text-slate-400">Staging Dramatic Thumbnail Text overlays</h4>
+                  <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                    Formulate video concepts and select psychological hooks to let CreatorBoost export layout parameters and thumbnail copy recipes.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 5. SCRIPT GENERATOR */}
+          {activeTab === "script" && (
+            <div className="space-y-6">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="p-1 px-2.5 font-mono text-[10px] uppercase font-bold tracking-widest text-violet-400 bg-violet-400/10 border border-violet-400/20 rounded-full">
+                    Screenplay Structure Generator
+                  </span>
+                </div>
+                <h2 className="text-3xl font-bold font-display tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
+                  Micro-Visual Screenplay Script Generator
+                </h2>
+                <p className="text-sm text-slate-400 mt-1 max-w-2xl">
+                  Build complete cinematic screenplays with incremental visual directions, audio hooks, SFX cues, and high-converting CTA.
+                </p>
+              </div>
+
+              {/* Form Input Deck */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                  <div className="md:col-span-2">
+                    <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
+                      Chosen Video Title
+                    </label>
+                    <input
+                      type="text"
+                      value={scriptTitle}
+                      onChange={(e) => setScriptTitle(e.target.value)}
+                      placeholder="e.g. My $3,000 Setup Build Secrets"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
+                      Format length
+                    </label>
+                    <select
+                      value={scriptFormat}
+                      onChange={(e) => setScriptFormat(e.target.value as "shorts" | "long-form")}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                    >
+                      <option value="shorts">YouTube Shorts Frame (60-sec cap)</option>
+                      <option value="long-form">Detailed Video Frame (5-10 mins)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="mb-5">
+                  <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
+                    Creative Vibe & Sound Tone
+                  </label>
+                  <input
+                    type="text"
+                    value={scriptTone}
+                    onChange={(e) => setScriptTone(e.target.value)}
+                    placeholder="e.g. High octane narration, relaxed ASMR, fast tech talker"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between border-t border-slate-800/60 pt-4 flex-wrap gap-3">
+                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                    <Info className="w-4 h-4 text-slate-500" />
+                    <span>Structures direct pacing visual-to-audio timelines.</span>
+                  </div>
+                  <button
+                    onClick={() => handleGenerate("script")}
+                    disabled={loading}
+                    className="px-6 py-3 bg-purple-600 hover:bg-purple-500 active:scale-95 disabled:opacity-50 disabled:scale-100 text-sm font-semibold text-white rounded-xl shadow-lg shadow-purple-600/10 transition-all flex items-center gap-2"
+                  >
+                    {loading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Scripting Narration Beats...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4 text-purple-200" />
+                        Generate Script Screenplay
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Outputs Script Display */}
+              {scriptResult ? (
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-lg font-bold font-display text-slate-200">
+                        Cinematic Script: "{scriptResult.title}"
+                      </h3>
+                      <p className="text-xs text-slate-450 uppercase font-mono font-bold text-violet-400">
+                        {scriptResult.format} · Tone: {scriptResult.tone}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleSaveResult("script", `Script: ${scriptResult.title} (${scriptResult.format})`, scriptResult)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-pink-500/10 border border-pink-500/20 text-xs font-semibold text-pink-400 hover:bg-pink-500/25 active:scale-95 transition-all rounded-lg"
+                    >
+                      <Bookmark className="w-3.5 h-3.5" /> Save Screenplay to Studio
+                    </button>
+                  </div>
+
+                  {/* Staged Presentation layout */}
+                  <div className="space-y-4">
+                    {/* Visual 1st Sec Hook Card */}
+                    <div className="bg-gradient-to-r from-violet-950/40 via-purple-950/20 to-slate-900 border border-violet-500/20 rounded-2xl p-6 shadow-md">
+                      <span className="block text-[10px] font-mono tracking-widest font-black uppercase text-violet-400 mb-2">
+                        THE 3-SECOND RETENTION HOOK
+                      </span>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-sans">
+                        <div className="space-y-1">
+                          <span className="text-slate-450 uppercase font-mono font-bold block text-[10px]">What is shown (Visual)</span>
+                          <p className="text-slate-200 font-medium">{scriptResult.hookVisual}</p>
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-slate-450 uppercase font-mono font-bold block text-[10px]">What is heard (Audio Narration)</span>
+                          <p className="text-amber-300 font-bold text-sm tracking-tight">{scriptResult.hookAudio}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Timeline lists */}
+                    <div className="space-y-3">
+                      <span className="block text-xs uppercase font-mono tracking-wider text-slate-500 px-1">
+                        Scene Flow Timeline Beats
+                      </span>
+                      {scriptResult.sections.map((sec, i) => (
+                        <div
+                          key={i}
+                          className="bg-slate-900 border border-slate-850 rounded-xl p-5 hover:border-slate-800 transition-all flex flex-col md:flex-row gap-4 items-start md:items-center relative"
+                        >
+                          <div className="bg-slate-950 border border-slate-800 p-2.5 rounded-lg flex flex-col items-center justify-center shrink-0 w-16 text-center shadow-inner">
+                            <span className="text-[10px] font-mono uppercase text-slate-500 font-bold mb-0.5">SCENE</span>
+                            <span className="text-lg font-black font-display text-white">0{sec.sceneNum || i+1}</span>
+                          </div>
+
+                          <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs font-sans">
+                            <div className="space-y-0.5">
+                              <span className="text-slate-500 uppercase font-mono font-bold text-[9px] block">Camera Visual & Action</span>
+                              <p className="text-slate-300 pr-2 leading-relaxed">{sec.visualStyle}</p>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-slate-500 uppercase font-mono font-bold text-[9px] block">Narration / Vocal Line</span>
+                              <p className="text-slate-100 font-medium pr-2 text-[13px] leading-relaxed select-all">"{sec.spokenLine}"</p>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-slate-500 uppercase font-mono font-bold text-[9px] block">SFX Cues & Vibes</span>
+                              <p className="text-slate-400 leading-relaxed font-mono italic text-[11px]">{sec.sfx || "No SFX cues suggested"}</p>
+                            </div>
+                          </div>
+
+                          <div className="bg-slate-950/60 p-2 border border-slate-850 rounded-lg text-center shrink-0 self-stretch flex flex-col justify-center">
+                            <span className="text-[9px] font-mono uppercase text-slate-500 font-bold block">DURATION</span>
+                            <span className="text-xs font-bold font-mono text-purple-400">{sec.duration}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Final call to action card block */}
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-md">
+                      <span className="block text-[10px] font-mono tracking-widest font-black uppercase text-pink-400 mb-2">
+                        CONVERTING CALL TO ACTION (CTA)
+                      </span>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-sans">
+                        <div className="space-y-1">
+                          <span className="text-slate-450 uppercase font-mono font-bold block text-[10px]">End-Frame Staging Visual</span>
+                          <p className="text-slate-200">{scriptResult.ctaVisual}</p>
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-slate-450 uppercase font-mono font-bold block text-[10px]">End-Frame Spoken Pitch</span>
+                          <p className="text-pink-300 font-bold italic">"{scriptResult.ctaSpoken}"</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-slate-900 border border-dashed border-slate-800 rounded-2xl p-12 text-center text-slate-500">
+                  <FileCode className="w-12 h-12 text-slate-700 mx-auto mb-4" />
+                  <h4 className="text-base font-semibold text-slate-400">Cinematic Script Screenplay Creator</h4>
+                  <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                    Type in your chosen YouTube video title and let CreatorBoost orchestrate precise visual cues, spoken dialogue pacing, and SFX notes.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 6. TREND TRACKER EXPLORER */}
+          {activeTab === "trend" && (
+            <div className="space-y-6">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="p-1 px-2.5 font-mono text-[10px] uppercase font-bold tracking-widest text-cyan-400 bg-cyan-400/10 border border-cyan-400/20 rounded-full">
+                    Viral Velocity Tracker
+                  </span>
+                </div>
+                <h2 className="text-3xl font-bold font-display tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
+                  Viral Trends Finder
+                </h2>
+                <p className="text-sm text-slate-400 mt-1 max-w-2xl">
+                  Leverage current social triggers and platform velocity indicators. Detail why ideas trend, psychological hooks, and adoptable visual strategies.
+                </p>
+              </div>
+
+              {/* Form Input Deck */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+                  <div>
+                    <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
+                      Creator Industry Category
+                    </label>
+                    <select
+                      value={trendCategory}
+                      onChange={(e) => setTrendCategory(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                    >
+                      <option value="Tech, Programming & AI">Tech, Programming & AI</option>
+                      <option value="Finance, Stocks & Crypto">Finance, Stocks & Crypto</option>
+                      <option value="Gaming & Speedruns">Gaming & Speedruns (Minecraft, Roblox, Esports)</option>
+                      <option value="Self-Improvement & Fitness">Self-Improvement & Fitness</option>
+                      <option value="Vlog, Travel & Everyday Life">Vlog, Travel & Everyday Life</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs uppercase font-bold tracking-wider font-mono text-slate-400 mb-1.5">
+                      Target Social Network
+                    </label>
+                    <select
+                      value={trendPlatform}
+                      onChange={(e) => setTrendPlatform(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+                    >
+                      <option value="youtube">YouTube (Long & Shorts)</option>
+                      <option value="tiktok">TikTok Channels</option>
+                      <option value="instagram">Instagram Reels Feed</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between border-t border-slate-800/60 pt-4 flex-wrap gap-3">
+                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                    <Info className="w-4 h-4 text-slate-500" />
+                    <span>Scans search patterns and viral velocity metrics.</span>
+                  </div>
+                  <button
+                    onClick={() => handleGenerate("trend")}
+                    disabled={loading}
+                    className="px-6 py-3 bg-purple-600 hover:bg-purple-500 active:scale-95 disabled:opacity-50 disabled:scale-100 text-sm font-semibold text-white rounded-xl shadow-lg shadow-purple-600/10 transition-all flex items-center gap-2"
+                  >
+                    {loading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Scanning Social Media Velocity...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4 text-purple-200" />
+                        Scan Viral Trends
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Rendering output */}
+              {trendResult ? (
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-lg font-bold font-display text-slate-200">
+                        Top Trending Topics: "{trendResult.category}"
+                      </h3>
+                      <p className="text-xs text-slate-450 uppercase font-mono font-bold text-cyan-400">
+                        Platform: {trendResult.platform}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleSaveResult("trend", `Trends: ${trendResult.category}`, trendResult)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-pink-500/10 border border-pink-500/20 text-xs font-semibold text-pink-400 hover:bg-pink-500/25 active:scale-95 transition-all rounded-lg"
+                    >
+                      <Bookmark className="w-3.5 h-3.5" /> Save Trend Report to Workspace
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-6">
+                    {trendResult.trends.map((item, idx) => (
+                      <div
+                        key={idx}
+                        className="bg-slate-900 border border-slate-800 hover:border-slate-700 p-6 rounded-2xl shadow-md transition-all group flex flex-col md:flex-row md:items-center gap-6"
+                      >
+                        {/* Left visual velocity gauge */}
+                        <div className="shrink-0 flex flex-col items-center justify-center p-4 bg-slate-950 border border-slate-800 rounded-xl w-32 shadow-inner text-center">
+                          <span className="text-[9px] font-mono uppercase text-slate-500 font-bold block mb-1">GROWTH RATIO</span>
+                          <span className="text-xl font-black font-mono text-cyan-400 tracking-tight">{item.velocity || "950% ↑"}</span>
+                          <div className="w-full h-1 bg-slate-850 rounded-full mt-2 overflow-hidden">
+                            <div className="h-full bg-cyan-500 rounded-full" style={{ width: "85%" }} />
+                          </div>
+                        </div>
+
+                        {/* Mid descriptions elements */}
+                        <div className="flex-1 space-y-2">
+                          <h4 className="text-lg font-bold font-display text-white group-hover:text-cyan-300 transition-colors">
+                            {item.trendTitle}
+                          </h4>
+                          <p className="text-xs text-slate-350 pr-4 leading-relaxed font-sans">
+                            <span className="font-bold text-slate-450">Why it trends:</span> {item.explanation}
+                          </p>
+                          <div className="bg-slate-950/60 p-2.5 rounded-lg border border-slate-850 inline-block text-xs italic text-[11px] text-purple-300 font-sans mt-1">
+                            <span className="font-bold font-mono tracking-wider uppercase text-[9px] text-slate-500 not-italic block mb-0.5">Audience Triggers</span>
+                            "{item.targetAudienceTip}"
+                          </div>
+                        </div>
+
+                        {/* Right: Creator angles adaptions pointers */}
+                        <div className="shrink-x bg-slate-950/70 border border-slate-850 p-4 rounded-xl md:w-80 font-sans text-xs">
+                          <span className="text-[10px] uppercase font-mono font-bold text-slate-400 tracking-wider block mb-2 border-b border-slate-850 pb-1">
+                            Suggested Creator Adaption Angles
+                          </span>
+                          <ul className="space-y-1.5">
+                            {item.angles.map((ang, i) => (
+                              <li key={i} className="flex gap-2 text-slate-300 text-[11px] leading-relaxed">
+                                <span className="font-bold text-purple-400 shrink-0">✓</span>
+                                <span>{ang}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-slate-900 border border-dashed border-slate-800 rounded-2xl p-12 text-center text-slate-500">
+                  <TrendingUp className="w-12 h-12 text-slate-700 mx-auto mb-4" />
+                  <h4 className="text-base font-semibold text-slate-400">Viral Trends Velocity Tracker</h4>
+                  <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                    Select your creator category niche and trigger the tracker to gather velocity analytics metrics showing why concepts trend with adoptable video models.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 7. SAVED LIBRARY */}
+          {activeTab === "saves" && (
+            <div className="space-y-6">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="p-1 px-2.5 font-mono text-[10px] uppercase font-bold tracking-widest text-pink-400 bg-pink-400/10 border border-pink-400/20 rounded-full">
+                    Your Personal Studio Library
+                  </span>
+                </div>
+                <h2 className="text-3xl font-bold font-display tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
+                  Saved Content Studio Workspace
+                </h2>
+                <p className="text-sm text-slate-400 mt-1 max-w-2xl">
+                  Manage ideas, CTR titles, screenplays, thumbnail overlays, and trend velocity reports compiled during your current work session.
+                </p>
+              </div>
+
+              {savedItems.length === 0 ? (
+                <div className="bg-slate-900 border border-dashed border-slate-800 rounded-2xl p-16 text-center text-slate-500">
+                  <Heart className="w-12 h-12 text-slate-700 mx-auto mb-4" />
+                  <h4 className="text-base font-semibold text-slate-400">No Content Saved Yet</h4>
+                  <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                    When you run any of the booster tools, click the "Save to Workspace" button to compile them into this studio pipeline.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {savedItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className="bg-slate-900 border border-slate-800 hover:border-slate-700 p-5 rounded-2xl shadow-md transition-all"
+                    >
+                      {/* Header bar of saved item */}
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+                        <div className="flex items-center gap-2.5">
+                          <span className={`p-1 px-2.5 font-mono text-[9px] uppercase font-bold rounded-md ${
+                            item.type === "idea" ? "bg-amber-400/10 text-amber-400 border border-amber-400/20" :
+                            item.type === "title" ? "bg-blue-400/10 text-blue-400 border border-blue-400/20" :
+                            item.type === "description" ? "bg-emerald-400/10 text-emerald-400 border border-emerald-400/20" :
+                            item.type === "thumbnail" ? "bg-pink-400/10 text-pink-400 border border-pink-400/20" :
+                            item.type === "script" ? "bg-violet-400/10 text-violet-400 border border-violet-400/20" :
+                            "bg-cyan-400/10 text-cyan-400 border border-cyan-400/20"
+                          }`}>
+                            {item.type}
+                          </span>
+                          <span className="text-sm font-bold font-display text-white">{item.title}</span>
+                        </div>
+
+                        <div className="flex items-center gap-4">
+                          <span className="text-[10px] text-slate-500 font-mono flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-slate-600" /> {item.timestamp}
+                          </span>
+                          <button
+                            onClick={() => handleRemoveSaved(item.id)}
+                            className="p-1 px-2 text-rose-405 hover:bg-rose-500/10 hover:text-rose-400 rounded transition-colors text-xs flex items-center gap-1 font-mono hover:scale-105"
+                            title="Remove Saved Item"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" /> delete
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Expandable Render based on model saved type */}
+                      <div className="space-y-4">
+                        {/* IDEAS */}
+                        {item.type === "idea" && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {item.data.ideas.map((idea: VideoIdea, idx: number) => (
+                              <div key={idx} className="bg-slate-950 p-4 border border-slate-850 rounded-xl relative">
+                                <span className="absolute right-3 top-3 font-mono text-[10px] text-slate-600 font-black">IDEA #{idx+1}</span>
+                                <h5 className="font-bold text-xs text-white pr-10">{idea.title}</h5>
+                                <p className="text-[11px] text-slate-400 mt-1 leading-relaxed"><strong className="text-slate-500">Angle:</strong> {idea.angle}</p>
+                                <p className="text-[11px] text-slate-400 leading-relaxed"><strong className="text-purple-400">Pacing:</strong> {idea.pacingTip}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* TITLES */}
+                        {item.type === "title" && (
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs font-sans">
+                            <div className="bg-slate-950 p-4 border border-slate-850 rounded-xl">
+                              <span className="block text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500 border-b border-slate-800 pb-1 mb-2">CTR CLickable</span>
+                              <ul className="space-y-1 text-slate-300">
+                                {item.data.clickable.map((it: string, i: number) => <li key={i} className="py-0.5 leading-relaxed bg-slate-900/40 px-1.5 rounded">{it}</li>)}
+                              </ul>
+                            </div>
+                            <div className="bg-slate-950 p-4 border border-slate-850 rounded-xl">
+                              <span className="block text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500 border-b border-slate-800 pb-1 mb-2">SEO Optimized</span>
+                              <ul className="space-y-1 text-slate-300">
+                                {item.data.seo.map((it: string, i: number) => <li key={i} className="py-0.5 leading-relaxed bg-slate-900/40 px-1.5 rounded">{it}</li>)}
+                              </ul>
+                            </div>
+                            <div className="bg-slate-950 p-4 border border-slate-850 rounded-xl">
+                              <span className="block text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500 border-b border-slate-800 pb-1 mb-2">Shorts & Portrait</span>
+                              <ul className="space-y-1 text-slate-300">
+                                {item.data.shorts.map((it: string, i: number) => <li key={i} className="py-0.5 leading-relaxed bg-slate-900/40 px-1.5 rounded text-pink-300 font-bold font-mono">{it}</li>)}
+                              </ul>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* DESCRIPTIONS */}
+                        {item.type === "description" && (
+                          <div className="space-y-3">
+                            <div className="bg-slate-950 p-4 border border-slate-850 rounded-xl whitespace-pre-wrap font-mono text-[11px] leading-relaxed max-h-[220px] overflow-y-auto text-slate-300 select-all">
+                              {item.data.formattedDescription}
+                            </div>
+                            <div className="flex flex-wrap gap-2 text-[11px]">
+                              {item.data.hashtags.map((ht: string, i: number) => <span key={i} className="text-purple-400 font-bold">{ht}</span>)}
+                              {item.data.tags.map((tag: string, i: number) => <span key={i} className="bg-slate-950 px-2 py-0.5 border border-slate-850 text-slate-400 rounded">{tag}</span>)}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* THUMBNAILS */}
+                        {item.type === "thumbnail" && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-sans">
+                            {item.data.suggestions.map((sug: ThumbnailSuggestion, i: number) => (
+                              <div key={i} className="bg-slate-950 border border-slate-850 rounded-xl p-3">
+                                <div className="aspect-[16/9] rounded mb-2 flex items-center justify-center font-display font-extrabold text-[10px] tracking-wide uppercase shadow" style={{ backgroundColor: sug.bgColor, color: sug.textColor }}>
+                                  {sug.text}
+                                </div>
+                                <span className="font-bold text-slate-300">"{sug.text}"</span>
+                                <p className="text-[10px] text-slate-400 mt-1 italic pr-1">{sug.compositionTip}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* SCRIPTS */}
+                        {item.type === "script" && (
+                          <div className="space-y-3">
+                            <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 text-[11px]">
+                              <p className="border-b border-slate-800 pb-1 mb-2 font-mono"><strong className="text-purple-400 uppercase">Retention Hook Line:</strong> {item.data.hookAudio}</p>
+                              <div className="space-y-1 font-sans">
+                                {item.data.sections.slice(0, 3).map((sec: ScriptSection, idx: number) => (
+                                  <div key={idx} className="flex gap-2 text-slate-300 my-1 py-1 bg-slate-900/30 rounded px-1.5">
+                                    <span className="font-bold text-purple-400">Section {sec.sceneNum}:</span>
+                                    <span>"{sec.spokenLine}" <span className="text-slate-500 font-mono">({sec.duration})</span></span>
+                                  </div>
+                                ))}
+                                {item.data.sections.length > 3 && (
+                                  <span className="text-[10px] text-slate-600 block pl-1.5 italic font-mono">+ {item.data.sections.length - 3} further scene sequences inside generated screenplay record...</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* TRENDS */}
+                        {item.type === "trend" && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-sans">
+                            {item.data.trends.map((trend: TrendItem, i: number) => (
+                              <div key={i} className="bg-slate-950 border border-slate-850 rounded-xl p-4">
+                                <h5 className="font-bold text-white font-display mb-1">{trend.trendTitle} <span className="text-[10px] text-cyan-400 font-mono ml-1.5">({trend.velocity})</span></h5>
+                                <p className="text-[11px] text-slate-400 mb-2 leading-relaxed">{trend.explanation}</p>
+                                <div className="border-t border-slate-850 pt-2 flex flex-wrap gap-1.5">
+                                  {trend.angles.map((ang: string, aIdx: number) => <span key={aIdx} className="bg-slate-900 text-[10px] px-1.5 py-0.5 rounded text-slate-300">✓ {ang}</span>)}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 8. PRICING SHEET */}
+          {activeTab === "pricing" && (
+            <div className="space-y-8 max-w-4xl mx-auto py-4">
+              {/* Pitch Header */}
+              <div className="text-center">
+                <span className="p-1 px-3 font-mono text-[10px] uppercase font-bold tracking-widest text-purple-400 bg-purple-400/10 border border-purple-400/20 rounded-full inline-block">
+                  Launch Premium Access Offer
+                </span>
+                <h2 className="text-4xl font-extrabold font-display tracking-tight text-white mt-3">
+                  Unleash Viral Creator Capabilities
+                </h2>
+                <p className="text-slate-400 mt-2 max-w-lg mx-auto text-sm leading-relaxed">
+                  Join hundreds of YouTubers and active Shorts musicians bypassing creative blocks. Scale views in minutes.
+                </p>
+              </div>
+
+              {/* Plans side by side */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-stretch">
+                
+                {/* Free Plan */}
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 flex flex-col justify-between shadow-xl relative">
+                  <div>
+                    <div className="flex justify-between items-center mb-4">
+                      <span className="font-display font-medium text-lg text-slate-300">Starter Free Tier</span>
+                      <span className="text-[10px] font-mono tracking-wider font-bold text-slate-500 uppercase px-2 py-0.5 border border-slate-800 rounded">Active</span>
+                    </div>
+
+                    <div className="flex items-baseline gap-1 mb-6">
+                      <span className="text-4xl font-extrabold font-display text-white">₹0</span>
+                      <span className="text-slate-400 text-sm">/ month</span>
+                    </div>
+
+                    <p className="text-xs text-slate-400 mb-6">
+                      Perfect for trying out CreatorBoost tools to see core algorithm performance outputs before publishing.
+                    </p>
+
+                    <ul className="space-y-3.5 text-xs text-slate-300 font-sans border-t border-slate-800/80 pt-6">
+                      <li className="flex items-center gap-2.5">
+                        <Check className="w-4 h-4 text-emerald-400" />
+                        <span>10 tool generations daily limit</span>
+                      </li>
+                      <li className="flex items-center gap-2.5">
+                        <Check className="w-4 h-4 text-emerald-400" />
+                        <span>Core video concept ideas planner</span>
+                      </li>
+                      <li className="flex items-center gap-2.5">
+                        <Check className="w-4 h-4 text-emerald-400" />
+                        <span>A/B CTR Clickable Title Suite</span>
+                      </li>
+                      <li className="flex items-center gap-2.5">
+                        <Check className="w-4 h-4 text-emerald-400" />
+                        <span>Detailed chapters outline descriptions</span>
+                      </li>
+                    </ul>
+                  </div>
+
+                  <div className="mt-8 pt-4">
+                    <button
+                      onClick={() => {
+                        handleSetPro(false);
+                        alert("You are on the standard Free tier containing 10 credits limit / day.");
+                      }}
+                      className="w-full py-3 bg-slate-950 border border-slate-800 hover:bg-slate-850 text-slate-400 hover:text-white transition-colors duration-200 text-xs font-bold rounded-2xl cursor-pointer"
+                    >
+                      {isPro ? "Switch to Free Version" : "Currently Active"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Pro Plan */}
+                <div className="bg-gradient-to-b from-slate-900 to-slate-950 border-2 border-purple-500 rounded-3xl p-8 flex flex-col justify-between shadow-2xl relative overflow-hidden">
+                  
+                  {/* Decorative corner tag banner */}
+                  <div className="absolute top-0 right-0 bg-gradient-to-l from-purple-500 to-pink-500 text-white font-mono font-bold text-[9px] tracking-wider uppercase px-4 py-1.5 rounded-bl-3xl shadow">
+                    Most Popular Choice
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between items-center mb-4">
+                      <span className="font-display font-black text-lg text-white">Unlimited Creator Pro</span>
+                      {isPro && (
+                        <span className="text-[9px] font-mono tracking-wider font-extrabold text-purple-400 uppercase px-2 py-0.5 bg-purple-500/15 border border-purple-500/20 rounded-full animate-bounce">
+                          Active Premium
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-baseline gap-1 mb-6">
+                      <span className="text-4xl font-extrabold font-display bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">₹299</span>
+                      <span className="text-slate-400 text-sm">/ month</span>
+                    </div>
+
+                    <p className="text-xs text-slate-400 mb-6">
+                      For YouTubers, musicians and multi-channel podcasters demanding heavy daily publish volumes and endless trend strategies.
+                    </p>
+
+                    <ul className="space-y-3.5 text-xs text-slate-200 font-sans border-t border-slate-800 pt-6">
+                      <li className="flex items-center gap-2.5">
+                        <Check className="w-4 h-4 text-purple-400" />
+                        <span className="font-bold">Unlimited content generations (99k+ credits/day)</span>
+                      </li>
+                      <li className="flex items-center gap-2.5">
+                        <Check className="w-4 h-4 text-purple-400" />
+                        <span>Interactive Screenplay Script Generation beats</span>
+                      </li>
+                      <li className="flex items-center gap-2.5">
+                        <Check className="w-4 h-4 text-purple-400" />
+                        <span>Shocking contrast Thumbnail Text layouts</span>
+                      </li>
+                      <li className="flex items-center gap-2.5">
+                        <Check className="w-4 h-4 text-purple-400" />
+                        <span>Social Trends velocity scanner index maps</span>
+                      </li>
+                      <li className="flex items-center gap-2.5">
+                        <Check className="w-4 h-4 text-purple-400" />
+                        <span className="p-1 px-1.5 text-[8px] bg-purple-500/20 text-purple-300 rounded font-mono uppercase">V1 Bonus</span> Priority queue API responses speed
+                      </li>
+                    </ul>
+                  </div>
+
+                  <div className="mt-8 pt-4">
+                    <button
+                      onClick={() => {
+                        handleSetPro(!isPro);
+                        alert(!isPro ? "Demo Upgrade Successful! You are now a premium Pro member containing unlimited generations." : "Switched back to Free trial.");
+                      }}
+                      className="w-full py-3 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 hover:shadow-lg hover:shadow-pink-500/10 active:scale-95 transition-all text-xs font-bold text-white rounded-2xl cursor-pointer"
+                    >
+                      {isPro ? "Deactivate Pro Status (Demo Mode)" : "Simulate Upgrade to Pro (₹299)"}
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Upgrade Pitch FAQ footer info */}
+              <div className="bg-slate-900/40 border border-slate-850 p-4.5 rounded-2xl flex items-start gap-3.5 text-xs text-slate-450 max-w-xl mx-auto font-sans leading-relaxed">
+                <HelpCircle className="w-5 h-5 text-purple-400 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold text-slate-300">How do daily credits reset?</span>
+                  <p className="mt-0.5">
+                    For evaluation and demonstration purposes, we built an instantaneous <span className="font-mono text-purple-400 decoration-dotted underline">Reset icon indicator</span> right inside the top Daily Generations bar to let you easily reload daily credits anytime in the preview window!
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+        </main>
+      </div>
+
+      {/* Persistent global responsive grid background styling footer */}
+      <footer className="bg-slate-950 border-t border-slate-900 px-6 py-4.5 text-center text-[11px] text-slate-500 font-mono tracking-wide">
+        CreatorBoost AI · Scaled inside Cloud Run Sandbox Environment Workspace Container · Gemini Powered API
+      </footer>
+
+    </div>
+  );
+}
