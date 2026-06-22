@@ -44,14 +44,30 @@ app.post("/api/generate", async (req, res) => {
       return res.status(400).json({ error: "toolType is required" });
     }
 
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) {
-      return res.status(500).json({
-        error: "GEMINI_API_KEY is empty. Please set it in the Settings/Secrets panel of high level AI Studio interface."
-      });
-    }
+    const userOpenAIKey = req.headers["x-openai-api-key"] as string;
+    const userGeminiKey = req.headers["x-gemini-api-key"] as string;
+    const preferredProvider = req.headers["x-preferred-provider"] as string;
 
-    const ai = getGeminiClient();
+    let ai = getGeminiClient();
+
+    // Dynamically lazy-load user's custom Gemini key if appropriate
+    if (preferredProvider === "custom-gemini" && userGeminiKey) {
+      ai = new GoogleGenAI({
+        apiKey: userGeminiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build-custom-gemini',
+          }
+        }
+      });
+    } else if (preferredProvider !== "openai") {
+      const serverKey = process.env.GEMINI_API_KEY;
+      if (!serverKey) {
+        return res.status(500).json({
+          error: "GEMINI_API_KEY is empty. Please set it in the Settings/Secrets panel of your high level AI Studio workspace, or enter your own custom OpenAI API key under the 'API Provider Key' dashboard tab."
+        });
+      }
+    }
 
     let prompt = "";
     let schema: any = {};
@@ -228,6 +244,54 @@ app.post("/api/generate", async (req, res) => {
       return res.status(400).json({ error: "Invalid toolType" });
     }
 
+    // Use custom OpenAI routing if requested and configured
+    if (preferredProvider === "openai" && userOpenAIKey) {
+      console.log("Routing text request to OpenAI for toolType:", toolType);
+      
+      const openaiPrompt = `You are an expert YouTube content algorithm optimization engine. We are running toolType: "${toolType}". You MUST respond with a raw JSON object strictly conforming to the requested schema. Return only the raw JSON. Do not wrap the JSON in markdown blocks like \`\`\`json.
+      
+      TASK PROMPT:
+      ${prompt}
+      
+      REQUIRED JSON STRUCTURE SCHEMA:
+      ${JSON.stringify(schema)}`;
+
+      const openaiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${userOpenAIKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [
+            {
+              role: "user",
+              content: openaiPrompt
+            }
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.9
+        })
+      });
+
+      if (!openaiResponse.ok) {
+        const errorText = await openaiResponse.text();
+        console.error("OpenAI text completion error response:", errorText);
+        throw new Error(`OpenAI Completion Failed: ${errorText}`);
+      }
+
+      const parsedOpenai = await openaiResponse.json();
+      const textResult = parsedOpenai.choices[0].message.content;
+      try {
+        const parsedData = JSON.parse(textResult);
+        return res.json(parsedData);
+      } catch (parseErr) {
+        console.error("Failed to parse OpenAI response JSON:", textResult, parseErr);
+        return res.status(500).json({ error: "Invalid JSON structure returned by OpenAI model", raw: textResult });
+      }
+    }
+
     const response = await ai.models.generateContent({
       model: "gemini-3.5-flash",
       contents: prompt,
@@ -264,14 +328,67 @@ app.post("/api/generate-image", async (req, res) => {
       return res.status(400).json({ error: "prompt is required" });
     }
 
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) {
-      return res.status(500).json({
-        error: "GEMINI_API_KEY is empty. Please set it in the Settings/Secrets panel of your AI Studio interface."
-      });
+    const userOpenAIKey = req.headers["x-openai-api-key"] as string;
+    const userGeminiKey = req.headers["x-gemini-api-key"] as string;
+    const preferredProvider = req.headers["x-preferred-provider"] as string;
+
+    // Use custom OpenAI routing for image generation via DALL-E 3
+    if (preferredProvider === "openai" && userOpenAIKey) {
+      console.log("Routing image generation request to OpenAI/DALL-E-3 for prompt:", prompt);
+      
+      try {
+        const dallEResponse = await fetch("https://api.openai.com/v1/images/generations", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${userOpenAIKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "dall-e-3",
+            prompt: prompt,
+            n: 1,
+            size: "1024x1024"
+          })
+        });
+
+        if (!dallEResponse.ok) {
+          const errorText = await dallEResponse.text();
+          console.error("OpenAI image generation failed:", errorText);
+          throw new Error(`OpenAI DALL-E-3 image generation failed: ${errorText}`);
+        }
+
+        const parsedDallE = await dallEResponse.json();
+        const imageUrl = parsedDallE.data[0].url;
+        return res.json({
+          imageUrl,
+          isFallback: false,
+          fallbackReason: ""
+        });
+      } catch (err: any) {
+        console.error("DALL-E 3 request error:", err);
+        return res.status(500).json({ error: err.message || "An error occurred during DALL-E 3 generation." });
+      }
     }
 
-    const ai = getGeminiClient();
+    // Determine safe Gemini client key
+    let ai = getGeminiClient();
+    if (preferredProvider === "custom-gemini" && userGeminiKey) {
+      ai = new GoogleGenAI({
+        apiKey: userGeminiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build-custom-gemini',
+          }
+        }
+      });
+    } else {
+      const serverKey = process.env.GEMINI_API_KEY;
+      if (!serverKey) {
+        return res.status(500).json({
+          error: "GEMINI_API_KEY is empty. Please set it in your Settings/Secrets panel or supply a custom OpenAI API Key."
+        });
+      }
+    }
 
     let isFallback = false;
     let fallbackReason = "";

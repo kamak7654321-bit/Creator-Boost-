@@ -10,6 +10,7 @@ import {
   CreditCard,
   Target,
   Sparkles,
+  Key,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -41,6 +42,7 @@ export default function Sidebar({ activeTab, setActiveTab, savedCount }: Sidebar
       items: [
         { id: "saves", label: "Saved Studio", icon: Heart, count: savedCount, color: "text-pink-500" },
         { id: "pricing", label: "Pricing & Pro Status", icon: CreditCard, color: "text-purple-400" },
+        { id: "api-keys", label: "API Provider Key", icon: Key, color: "text-amber-400" },
       ],
     }
   ];

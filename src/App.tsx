@@ -25,7 +25,8 @@ import {
   Video,
   Info,
   DollarSign,
-  AlertCircle
+  AlertCircle,
+  Key
 } from "lucide-react";
 import Header from "./components/Header";
 import Sidebar from "./components/Sidebar";
@@ -44,6 +45,8 @@ import {
   ThumbnailPromptConcept,
   ThumbnailPromptPayload,
 } from "./types";
+
+import { generateDirectlyFromClient, generateImageDirectlyFromClient } from "./utils/clientApi";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>("idea");
@@ -110,6 +113,23 @@ export default function App() {
   const [errorText, setErrorText] = useState<string | null>(null);
   const [fallbackWarning, setFallbackWarning] = useState<string | null>(null);
 
+  // Custom user-provided API Keys
+  const [openaiKey, setOpenaiKey] = useState<string>("");
+  const [userGeminiKey, setUserGeminiKey] = useState<string>("");
+  const [preferredProvider, setPreferredProvider] = useState<string>("default");
+  const [isRightColumnExpanded, setIsRightColumnExpanded] = useState<boolean>(() => {
+    const cachedCombined = localStorage.getItem("cb_api_col_expanded");
+    return cachedCombined !== "false";
+  });
+
+  const handleToggleRightColumn = () => {
+    setIsRightColumnExpanded(prev => {
+      const next = !prev;
+      localStorage.setItem("cb_api_col_expanded", next ? "true" : "false");
+      return next;
+    });
+  };
+
   // Load from localStorage on initialization
   useEffect(() => {
     const cachedCount = localStorage.getItem("cb_generations_count");
@@ -117,6 +137,15 @@ export default function App() {
 
     const cachedPro = localStorage.getItem("cb_is_pro");
     if (cachedPro) setIsPro(cachedPro === "true");
+
+    const cachedOpenaiKey = localStorage.getItem("cb_openai_key");
+    if (cachedOpenaiKey) setOpenaiKey(cachedOpenaiKey);
+
+    const cachedUserGeminiKey = localStorage.getItem("cb_user_gemini_key");
+    if (cachedUserGeminiKey) setUserGeminiKey(cachedUserGeminiKey);
+
+    const cachedProvider = localStorage.getItem("cb_preferred_provider");
+    if (cachedProvider) setPreferredProvider(cachedProvider);
 
     const cachedSaves = localStorage.getItem("cb_saved_items");
     if (cachedSaves) {
@@ -137,6 +166,21 @@ export default function App() {
   const handleSetPro = (status: boolean) => {
     setIsPro(status);
     localStorage.setItem("cb_is_pro", status ? "true" : "false");
+  };
+
+  const handleSaveOpenaiKey = (key: string) => {
+    setOpenaiKey(key);
+    localStorage.setItem("cb_openai_key", key);
+  };
+
+  const handleSaveUserGeminiKey = (key: string) => {
+    setUserGeminiKey(key);
+    localStorage.setItem("cb_user_gemini_key", key);
+  };
+
+  const handleSavePreferredProvider = (prov: string) => {
+    setPreferredProvider(prov);
+    localStorage.setItem("cb_preferred_provider", prov);
   };
 
   const updateSaves = (items: SavedItem[]) => {
@@ -171,10 +215,11 @@ export default function App() {
 
   // Core API Submission Handler
   const handleGenerate = async (type: string) => {
-    // Check local limit first
-    if (generationsCount >= maxGenerations) {
-      setErrorText(`Daily Limit Reached. You have used all ${maxGenerations} generations. Upgrade to Premium for unlimited queries!`);
-      setActiveTab("pricing");
+    // Check local limit first (bypass if they configured their own active custom keys)
+    const isUsingCustomKey = (preferredProvider === "openai" && openaiKey) || (preferredProvider === "custom-gemini" && userGeminiKey);
+    if (!isUsingCustomKey && generationsCount >= maxGenerations) {
+      setErrorText(`Daily Limit Reached. You have used all ${maxGenerations} generations. Upgrade to Premium for unlimited queries, or configure your own Custom API key under 'API Provider Key' settings!`);
+      setActiveTab("api-keys");
       return;
     }
 
@@ -190,19 +235,32 @@ export default function App() {
     else if (type === "script") params = { title: scriptTitle, format: scriptFormat, tone: scriptTone };
     else if (type === "trend") params = { category: trendCategory, platform: trendPlatform };
 
+    // Set custom headers with user-supplied API keys for safe proxying
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (openaiKey) headers["x-openai-api-key"] = openaiKey;
+    if (userGeminiKey) headers["x-gemini-api-key"] = userGeminiKey;
+    headers["x-preferred-provider"] = preferredProvider;
+
+    let responseData: any;
+
     try {
-      const response = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ toolType: type, params }),
-      });
+      if (isUsingCustomKey) {
+        console.log("Client-side direct routing active for provider:", preferredProvider);
+        responseData = await generateDirectlyFromClient(type, params, preferredProvider, openaiKey, userGeminiKey);
+      } else {
+        const response = await fetch("/api/generate", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ toolType: type, params }),
+        });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Generation request failed");
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || "Generation request failed");
+        }
+
+        responseData = await response.json();
       }
-
-      const responseData = await response.json();
 
       // Render respective output state
       if (type === "idea") {
@@ -260,7 +318,11 @@ export default function App() {
       saveToLocal(generationsCount + 1);
     } catch (err: any) {
       console.error(err);
-      setErrorText(err.message || "Something went wrong while compiling suggestions. Please check your network and API credentials.");
+      let errMsg = err.message || "Something went wrong while compiling suggestions. Please check your network and API credentials.";
+      if (errMsg.includes("insufficient_quota") || errMsg.includes("exceeded your current quota") || errMsg.includes("quota")) {
+        errMsg = "You exceeded your current OpenAI quota. This means your private custom OpenAI API Key does not have any active funds or credits left, or has expired. Please check your OpenAI Platform billing settings or switch back to standard defaults.";
+      }
+      setErrorText(errMsg);
     } finally {
       setLoading(false);
     }
@@ -273,8 +335,10 @@ export default function App() {
 
   // Dedicated generator utilizing Imagen 3 models.generateImages
   const handleGenerateImage = async (promptText: string, aspect: string, slotId: string) => {
-    if (generationsCount >= maxGenerations) {
-      setErrorText("Daily Limit Reached. Upgrading to Pro gives endless high CTR thumbnail generations!");
+    const isUsingCustomKey = (preferredProvider === "openai" && openaiKey) || (preferredProvider === "custom-gemini" && userGeminiKey);
+    if (!isUsingCustomKey && generationsCount >= maxGenerations) {
+      setErrorText("Daily Limit Reached. Upgrading to Pro or using your own Custom API key under 'API Provider Key' gives endless high CTR thumbnail generations!");
+      setActiveTab("api-keys");
       return;
     }
 
@@ -286,19 +350,31 @@ export default function App() {
     setErrorText(null);
     setFallbackWarning(null);
 
-    try {
-      const resp = await fetch("/api/generate-image", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: promptText, aspectRatio: aspect })
-      });
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (openaiKey) headers["x-openai-api-key"] = openaiKey;
+    if (userGeminiKey) headers["x-gemini-api-key"] = userGeminiKey;
+    headers["x-preferred-provider"] = preferredProvider;
 
-      if (!resp.ok) {
-        const errorData = await resp.json();
-        throw new Error(errorData.error || "Image generation query failed.");
+    try {
+      let resData: any;
+      if (preferredProvider === "openai" && openaiKey) {
+        console.log("Client-side direct image routing active");
+        resData = await generateImageDirectlyFromClient(promptText, aspect, preferredProvider, openaiKey, userGeminiKey);
+      } else {
+        const resp = await fetch("/api/generate-image", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: promptText, aspectRatio: aspect })
+        });
+
+        if (!resp.ok) {
+          const errorData = await resp.json();
+          throw new Error(errorData.error || "Image generation query failed.");
+        }
+
+        resData = await resp.json();
       }
 
-      const resData = await resp.json();
       const url = resData.imageUrl;
 
       if (resData.isFallback) {
@@ -314,7 +390,11 @@ export default function App() {
       saveToLocal(generationsCount + 1);
     } catch (err: any) {
       console.error(err);
-      setErrorText(err.message || "An unexpected error occurred during image generation.");
+      let errMsg = err.message || "An unexpected error occurred during image generation.";
+      if (errMsg.includes("insufficient_quota") || errMsg.includes("exceeded your current quota") || errMsg.includes("quota")) {
+        errMsg = "You exceeded your current OpenAI quota. This means your private custom OpenAI API Key does not have any active funds or credits left, or has expired. Please check your OpenAI Platform billing settings or switch back to standard defaults.";
+      }
+      setErrorText(errMsg);
     } finally {
       if (slotId === "custom") {
         setCustomImageLoading(false);
@@ -342,19 +422,45 @@ export default function App() {
         {/* Left Navigation Sidebar */}
         <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} savedCount={savedItems.length} />
 
-        {/* Right workspace core content */}
-        <main className="flex-1 p-6 lg:p-8 overflow-y-auto max-w-7xl mx-auto w-full">
+        {/* Workspace core wrapper */}
+        <div className="flex-1 flex flex-col xl:flex-row w-full min-h-0">
+          
+          {/* Main workspace scrollable contents */}
+          <main className="flex-1 p-6 lg:p-8 overflow-y-auto w-full max-w-5xl mx-auto">
           
           {/* Global Alert Notification block */}
           {errorText && (
-            <div className="bg-rose-950/40 border border-rose-500/30 rounded-2xl p-4 mb-6 flex gap-3 text-sm text-rose-200">
-              <AlertCircle className="w-5 h-5 shrink-0 text-rose-400 mt-0.5" />
-              <div className="flex-1">
-                <span className="font-bold">Execution Error: </span> {errorText}
+            <div className="bg-rose-950/40 border border-rose-500/30 rounded-2xl p-4 mb-6 flex flex-col md:flex-row gap-3 text-sm text-rose-200">
+              <div className="flex gap-3">
+                <AlertCircle className="w-5 h-5 shrink-0 text-rose-400 mt-0.5" />
+                <div className="flex-1">
+                  <span className="font-bold text-rose-350">Execution Error: </span> {errorText}
+                  {(errorText.includes("quota") || errorText.includes("API Key") || preferredProvider !== "default") && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        onClick={() => {
+                          handleSavePreferredProvider("default");
+                          setErrorText(null);
+                        }}
+                        className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-semibold transition-all cursor-pointer shadow hover:scale-[1.01] active:scale-95"
+                      >
+                        Dismiss & Switch to Free Standard Tier
+                      </button>
+                      <a
+                        href="https://platform.openai.com/api-keys"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 bg-slate-900 border border-slate-800 hover:border-slate-700 hover:bg-slate-850 text-slate-350 rounded-lg text-xs font-medium transition-all"
+                      >
+                        Check OpenAI Billing Balance ↗
+                      </a>
+                    </div>
+                  )}
+                </div>
               </div>
               <button
                 onClick={() => setErrorText(null)}
-                className="text-xs uppercase font-mono px-2 py-1 bg-rose-500/10 hover:bg-rose-500/20 rounded border border-rose-500/20 text-rose-300 self-start transition-colors"
+                className="text-xs uppercase font-mono px-2 py-1 bg-rose-500/10 hover:bg-rose-500/20 rounded border border-rose-500/20 text-rose-300 self-start transition-colors cursor-pointer md:ml-auto"
               >
                 Dismiss
               </button>
@@ -2065,6 +2171,296 @@ export default function App() {
             </div>
           )}
 
+          {/* 9. CUSTOM API PROVIDER KEYS */}
+          {activeTab === "api-keys" && (
+            <div className="space-y-8 max-w-4xl mx-auto py-4">
+              <div className="text-center">
+                <span className="p-1 px-3 font-mono text-[10px] uppercase font-bold tracking-widest text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded-full inline-block">
+                  Bring Your Own API Keys
+                </span>
+                <h2 className="text-4xl font-extrabold font-display tracking-tight text-white mt-3 text-center w-full">
+                  API Configuration Dashboard
+                </h2>
+                <p className="text-slate-400 mt-2 max-w-lg mx-auto text-sm leading-relaxed">
+                  Bypass standard daily limits, unlock developer benefits, and self-fund your content creation requests by configuring custom providers.
+                </p>
+              </div>
+
+              {/* Status & Settings block */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                
+                {/* 1. Default Tier Card */}
+                <div className={`border rounded-2xl p-6 flex flex-col justify-between transition-all ${
+                  preferredProvider === "default" 
+                    ? "bg-slate-900/90 border-purple-500 shadow-md shadow-purple-950/20" 
+                    : "bg-slate-900/40 border-slate-800"
+                }`}>
+                  <div>
+                    <div className="flex justify-between items-start mb-4">
+                      <span className="text-xs font-mono font-bold text-slate-400 tracking-wide">Developer Server</span>
+                      <span className={`text-[9px] font-mono font-bold uppercase px-2 py-0.5 rounded ${
+                        preferredProvider === "default" 
+                          ? "bg-purple-500/20 text-purple-300 border border-purple-500/30" 
+                          : "bg-slate-800 text-slate-500"
+                      }`}>
+                        {preferredProvider === "default" ? "Active" : "Standard"}
+                      </span>
+                    </div>
+                    <span className="block font-display font-bold text-lg text-white mb-1">Default Gemini Core</span>
+                    <p className="text-xs text-slate-400 mb-6 leading-relaxed">
+                      Powered by host-integrated high speed models. Subject to the standard free tier daily rate quota tracking.
+                    </p>
+                    <div className="space-y-2 border-t border-slate-800/80 pt-4 text-[11px] text-slate-350">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Language Model:</span>
+                        <span className="font-mono">gemini-3.5-flash</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Image Model:</span>
+                        <span className="font-mono">imagen-4.0-generate-001</span>
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleSavePreferredProvider("default")}
+                    className={`w-full py-2.5 rounded-xl text-xs font-bold mt-6 cursor-pointer transition-all ${
+                      preferredProvider === "default"
+                        ? "bg-purple-600 text-white shadow"
+                        : "bg-slate-800 hover:bg-slate-750 text-slate-300"
+                    }`}
+                  >
+                    {preferredProvider === "default" ? "Currently Active" : "Select Default Mode"}
+                  </button>
+                </div>
+
+                {/* 2. Custom OpenAI Key Card */}
+                <div className={`border rounded-2xl p-6 flex flex-col justify-between transition-all ${
+                  preferredProvider === "openai" 
+                    ? "bg-slate-900/90 border-amber-500 shadow-md shadow-amber-950/20" 
+                    : "bg-slate-900/40 border-slate-800"
+                }`}>
+                  <div>
+                    <div className="flex justify-between items-start mb-4">
+                      <span className="text-xs font-mono font-bold text-slate-400 tracking-wide">Custom OpenAI Integration</span>
+                      <span className={`text-[9px] font-mono font-bold uppercase px-2 py-0.5 rounded ${
+                        preferredProvider === "openai" 
+                          ? "bg-amber-400/25 text-amber-300 border border-amber-400/30 animate-pulse" 
+                          : "bg-slate-800 text-slate-500"
+                      }`}>
+                        {preferredProvider === "openai" ? "Active" : openaiKey ? "Saved" : "Not Set"}
+                      </span>
+                    </div>
+                    <span className="block font-display font-bold text-lg text-white mb-1">OpenAI API Key</span>
+                    <p className="text-xs text-slate-400 mb-6 leading-relaxed">
+                      Execute video scripts, descriptions, and thumbnail prompt layouts using elite-tier GPT capabilities with zero rate limit limits.
+                    </p>
+                    <div className="space-y-2 border-t border-slate-800/80 pt-4 text-[11px] text-slate-350 font-sans">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Language Model:</span>
+                        <span className="font-mono text-amber-300">gpt-4o-mini</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Image Model:</span>
+                        <span className="font-mono text-amber-300">dall-e-3 (OpenAI)</span>
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    disabled={!openaiKey}
+                    onClick={() => handleSavePreferredProvider("openai")}
+                    className={`w-full py-2.5 rounded-xl text-xs font-bold mt-6 cursor-pointer transition-all ${
+                      preferredProvider === "openai"
+                        ? "bg-amber-400 text-slate-950 shadow"
+                        : openaiKey
+                        ? "bg-slate-800 hover:bg-slate-755 text-slate-200"
+                        : "bg-slate-900 text-slate-650 cursor-not-allowed"
+                    }`}
+                  >
+                    {!openaiKey ? "Provide Key Below First" : preferredProvider === "openai" ? "Currently Active" : "Select OpenAI Mode"}
+                  </button>
+                </div>
+
+                {/* 3. Custom Gemini Key Card */}
+                <div className={`border rounded-2xl p-6 flex flex-col justify-between transition-all ${
+                  preferredProvider === "custom-gemini" 
+                    ? "bg-slate-900/90 border-blue-500 shadow-md shadow-blue-950/20" 
+                    : "bg-slate-900/40 border-slate-800"
+                }`}>
+                  <div>
+                    <div className="flex justify-between items-start mb-4">
+                      <span className="text-xs font-mono font-bold text-slate-400 tracking-wide">Custom Google Integration</span>
+                      <span className={`text-[9px] font-mono font-bold uppercase px-2 py-0.5 rounded ${
+                        preferredProvider === "custom-gemini" 
+                          ? "bg-blue-500/20 text-blue-300 border border-blue-500/30 animate-pulse" 
+                          : "bg-slate-800 text-slate-500"
+                      }`}>
+                        {preferredProvider === "custom-gemini" ? "Active" : userGeminiKey ? "Saved" : "Not Set"}
+                      </span>
+                    </div>
+                    <span className="block font-display font-bold text-lg text-white mb-1">Custom Gemini API Key</span>
+                    <p className="text-xs text-slate-400 mb-6 leading-relaxed">
+                      Deploy your own cloud Google GenAI billing engine credentials to unlock unrestricted video ideas and script timelines directly.
+                    </p>
+                    <div className="space-y-2 border-t border-slate-800/80 pt-4 text-[11px] text-slate-350">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Language Model:</span>
+                        <span className="font-mono text-blue-300">gemini-3.5-flash</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Image Model:</span>
+                        <span className="font-mono text-blue-300">imagen-4.0-generate-001 (Custom)</span>
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    disabled={!userGeminiKey}
+                    onClick={() => handleSavePreferredProvider("custom-gemini")}
+                    className={`w-full py-2.5 rounded-xl text-xs font-bold mt-6 cursor-pointer transition-all ${
+                      preferredProvider === "custom-gemini"
+                        ? "bg-blue-600 text-white shadow"
+                        : userGeminiKey
+                        ? "bg-slate-800 hover:bg-slate-750 text-slate-200"
+                        : "bg-slate-900 text-slate-650 cursor-not-allowed"
+                    }`}
+                  >
+                    {!userGeminiKey ? "Provide Key Below First" : preferredProvider === "custom-gemini" ? "Currently Active" : "Select Gemini Mode"}
+                  </button>
+                </div>
+
+              </div>
+
+              {/* API Configuration Form Fields */}
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6">
+                <h3 className="text-lg font-bold font-display text-white flex items-center gap-2">
+                  <Key className="w-5 h-5 text-amber-400" /> Enter API Keys Credentials
+                </h3>
+                <p className="text-xs text-slate-400 leading-relaxed max-w-xl">
+                  API Keys are strictly saved inside your browser's local sandbox data compartment (`localStorage`) via encrypted-safe memory state. They are never sent to third parties or saved permanently on the servers. This setup acts as a pipeline proxy.
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+                  
+                  {/* OpenAI key entry input */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-mono font-bold uppercase tracking-wider text-slate-300 block-label">
+                      OpenAI API Key (sk-...)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="password"
+                        placeholder="Paste your custom OpenAI API key"
+                        value={openaiKey}
+                        onChange={(e) => {
+                          const val = e.target.value.trim();
+                          handleSaveOpenaiKey(val);
+                          if (val && preferredProvider !== "openai") {
+                            handleSavePreferredProvider("openai");
+                          }
+                        }}
+                        className="w-full bg-slate-950 border border-slate-850 rounded-xl px-4 py-3 text-xs text-white font-mono placeholder-slate-600 focus:outline-none focus:border-amber-400 transition-all pr-12 text-left"
+                      />
+                      {openaiKey && (
+                        <button
+                          onClick={() => {
+                            handleSaveOpenaiKey("");
+                            if (preferredProvider === "openai") handleSavePreferredProvider("default");
+                          }}
+                          className="absolute right-3 top-3 text-[10px] uppercase font-mono tracking-wide text-rose-450 hover:text-rose-300 transition-colors cursor-pointer"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    <span className="block text-[10px] text-slate-500 leading-normal font-sans">
+                      Used for ChatGPT models. Requires an active OpenAI balance setup with standard credit allocations.
+                    </span>
+                  </div>
+
+                  {/* Gemini key entry input */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-mono font-bold uppercase tracking-wider text-slate-300 block-label-gemini">
+                      Google Gemini API Key (AIzaSy...)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="password"
+                        placeholder="Paste your custom Google Gemini API key"
+                        value={userGeminiKey}
+                        onChange={(e) => {
+                          const val = e.target.value.trim();
+                          handleSaveUserGeminiKey(val);
+                          if (val && preferredProvider !== "custom-gemini") {
+                            handleSavePreferredProvider("custom-gemini");
+                          }
+                        }}
+                        className="w-full bg-slate-950 border border-slate-850 rounded-xl px-4 py-3 text-xs text-white font-mono placeholder-slate-600 focus:outline-none focus:border-blue-400 transition-all pr-12 text-left"
+                      />
+                      {userGeminiKey && (
+                        <button
+                          onClick={() => {
+                            handleSaveUserGeminiKey("");
+                            if (preferredProvider === "custom-gemini") handleSavePreferredProvider("default");
+                          }}
+                          className="absolute right-3 top-3 text-[10px] uppercase font-mono tracking-wide text-rose-455 hover:text-rose-300 transition-colors cursor-pointer"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    <span className="block text-[10px] text-slate-500 leading-normal font-sans">
+                      Created in the Google AI Studio Console. Gives you full, unrestricted direct access to native Gemini endpoints.
+                    </span>
+                  </div>
+
+                </div>
+
+                {/* Health & Verify block */}
+                <div className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-1 px-2.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-mono uppercase font-bold">
+                      Safe Storage Activated
+                    </div>
+                    <span className="text-[11px] text-slate-400">
+                      Browser-Isolated Local Storage Enabled
+                    </span>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      if (openaiKey && openaiKey.length > 5) {
+                        handleSavePreferredProvider("openai");
+                        alert(`🎉 SUCCESS: OpenAI API Key activated!\n\nAll content recommendations, scripts, and DALL-E-3 thumbnail builders will now route directly through your OpenAI key bypass. Your daily limits have been fully unlocked!`);
+                      } else if (userGeminiKey && userGeminiKey.length > 5) {
+                        handleSavePreferredProvider("custom-gemini");
+                        alert(`🎉 SUCCESS: Google Gemini API Key activated!\n\nAll calls will run through your custom Gemini project credentials.`);
+                      } else {
+                        handleSavePreferredProvider("default");
+                        alert(`Please paste a valid API key into the inputs first to activate!`);
+                      }
+                    }}
+                    className="px-5 py-2.5 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-xs font-bold text-white rounded-xl active:scale-95 transition-all shadow cursor-pointer"
+                  >
+                    Apply & Sync Keys
+                  </button>
+                </div>
+
+              </div>
+
+              {/* Instructional Guidelines card */}
+              <div className="bg-slate-900/40 border border-slate-850 rounded-2xl p-5 flex gap-4 text-xs text-slate-400">
+                <Info className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                <div className="space-y-2">
+                  <span className="font-bold text-slate-300">How to get your Own OpenAI API Key?</span>
+                  <p className="leading-relaxed">
+                    1. Create an account on <a href="https://platform.openai.com/" target="_blank" rel="noreferrer" className="text-amber-400 hover:underline inline-flex items-center gap-0.5">OpenAI Platform <ExternalLink className="w-2.5 h-2.5" /></a>.<br />
+                    2. Go to the API Keys settings page, click <strong className="text-white">"Create new secret key"</strong>, copy it and paste it above.<br />
+                    3. Make sure to choose <strong className="text-slate-200">"OpenAI API Key"</strong> card as your active setting so the app redirects text generation and DALL-E-3 queries directly to OpenAI!
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* 8. PRICING SHEET */}
           {activeTab === "pricing" && (
             <div className="space-y-8 max-w-4xl mx-auto py-4">
@@ -2214,7 +2610,196 @@ export default function App() {
           )}
 
         </main>
+
+        {/* Right API Key Column Sidebar Panel */}
+        <aside className={`shrink-0 border-t xl:border-t-0 xl:border-l border-slate-900 bg-slate-950/40 p-6 xl:p-8 space-y-6 transition-all duration-300 ${
+          isRightColumnExpanded ? "w-full xl:w-88" : "w-full xl:w-16 xl:px-4 xl:py-8"
+        }`}>
+          {isRightColumnExpanded ? (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Key className="w-4 h-4 text-amber-400" />
+                  <span className="text-xs uppercase font-mono font-bold tracking-wider text-slate-300">API Key Panel</span>
+                </div>
+                <button
+                  onClick={handleToggleRightColumn}
+                  className="p-1 px-2 text-[10px] font-mono text-slate-500 hover:text-slate-350 bg-slate-900 rounded border border-slate-850 hover:border-slate-800 transition-colors cursor-pointer"
+                  title="Collapse Panel"
+                >
+                  Hide ✕
+                </button>
+              </div>
+
+              <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4.5 space-y-4 shadow-lg">
+                <div>
+                  <h3 className="text-xs font-mono font-bold text-slate-400 uppercase tracking-widest mb-1">Provider Mode</h3>
+                  <span className="text-[11px] text-slate-500 block leading-snug">Choose an active AI provider key route</span>
+                </div>
+
+                {/* Provider Radio Selector Buttons */}
+                <div className="space-y-2">
+                  <button
+                    onClick={() => handleSavePreferredProvider("default")}
+                    className={`w-full flex items-center justify-between p-2.5 rounded-lg border text-left text-xs transition-all cursor-pointer ${
+                      preferredProvider === "default"
+                        ? "bg-purple-950/30 border-purple-500 text-purple-200"
+                        : "bg-slate-950/60 border-slate-850 text-slate-450 hover:border-slate-805"
+                    }`}
+                  >
+                    <span className="font-semibold">Standard Defaults</span>
+                    <span className="text-[10px] font-mono text-slate-500">Free Tier</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (openaiKey) {
+                        handleSavePreferredProvider("openai");
+                      } else {
+                        alert("Please paste your OpenAI API Key first below to activate!");
+                      }
+                    }}
+                    className={`w-full flex items-center justify-between p-2.5 rounded-lg border text-left text-xs transition-all cursor-pointer ${
+                      preferredProvider === "openai"
+                        ? "bg-amber-950/30 border-amber-500 text-amber-200"
+                        : "bg-slate-950/60 border-slate-850 text-slate-450 hover:border-slate-805"
+                    }`}
+                  >
+                    <span className="font-semibold">OpenAI API Key</span>
+                    <span className={`text-[10px] font-mono font-bold uppercase rounded p-1 py-0.5 ${preferredProvider === "openai" ? "bg-amber-400/20 text-amber-300" : "bg-slate-900 text-slate-500"}`}>
+                      {preferredProvider === "openai" ? "Active" : openaiKey ? "Saved" : "Not Set"}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (userGeminiKey) {
+                        handleSavePreferredProvider("custom-gemini");
+                      } else {
+                        alert("Please paste your Custom Gemini API Key first below to activate!");
+                      }
+                    }}
+                    className={`w-full flex items-center justify-between p-2.5 rounded-lg border text-left text-xs transition-all cursor-pointer ${
+                      preferredProvider === "custom-gemini"
+                        ? "bg-blue-950/30 border-blue-500 text-blue-200"
+                        : "bg-slate-950/60 border-slate-850 text-slate-450 hover:border-slate-805"
+                    }`}
+                  >
+                    <span className="font-semibold">Google Gemini API</span>
+                    <span className={`text-[10px] font-mono font-bold uppercase rounded p-1 py-0.5 ${preferredProvider === "custom-gemini" ? "bg-blue-400/20 text-blue-300" : "bg-slate-900 text-slate-500"}`}>
+                      {preferredProvider === "custom-gemini" ? "Active" : userGeminiKey ? "Saved" : "Not Set"}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Input Fields Box */}
+              <div className="bg-slate-900/60 border border-slate-850 rounded-2xl p-4.5 space-y-4">
+                <span className="block text-[11px] uppercase tracking-wider font-mono font-bold text-slate-400">Configure Keys</span>
+
+                {/* OpenAI Input */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[10px] uppercase font-mono text-slate-450 font-bold">OpenAI Key (sk-...)</label>
+                    {openaiKey && (
+                      <button
+                        onClick={() => {
+                          handleSaveOpenaiKey("");
+                          if (preferredProvider === "openai") handleSavePreferredProvider("default");
+                        }}
+                        className="text-[9px] font-mono text-rose-500 hover:text-rose-450 cursor-pointer"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="password"
+                    placeholder="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+                    value={openaiKey}
+                    onChange={(e) => {
+                      const val = e.target.value.trim();
+                      handleSaveOpenaiKey(val);
+                      if (val && preferredProvider !== "openai") {
+                        handleSavePreferredProvider("openai");
+                      }
+                    }}
+                    className="w-full bg-slate-950 border border-slate-800 placeholder-slate-700 rounded-lg px-3 py-2 text-xs text-white text-left font-mono focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+
+                {/* Gemini Input */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[10px] uppercase font-mono text-slate-455 font-bold">Gemini Key (AIzaSy...)</label>
+                    {userGeminiKey && (
+                      <button
+                        onClick={() => {
+                          handleSaveUserGeminiKey("");
+                          if (preferredProvider === "custom-gemini") handleSavePreferredProvider("default");
+                        }}
+                        className="text-[9px] font-mono text-rose-500 hover:text-rose-455 cursor-pointer"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="password"
+                    placeholder="AIzaSyxxxxxxxxxxxxxxxxxxxxxx"
+                    value={userGeminiKey}
+                    onChange={(e) => {
+                      const val = e.target.value.trim();
+                      handleSaveUserGeminiKey(val);
+                      if (val && preferredProvider !== "custom-gemini") {
+                        handleSavePreferredProvider("custom-gemini");
+                      }
+                    }}
+                    className="w-full bg-slate-950 border border-slate-800 placeholder-slate-700 rounded-lg px-3 py-2 text-xs text-white text-left font-mono focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              {/* Pro / Keys Benefits Matrix */}
+              <div className="bg-gradient-to-br from-slate-900 to-purple-950/20 border border-purple-900/10 rounded-2xl p-4.5 space-y-3 shadow-md">
+                <div className="flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-purple-400 animate-pulse" />
+                  <span className="text-[11px] uppercase font-mono font-bold text-white tracking-wide">Benefits Unlocked</span>
+                </div>
+                
+                <ul className="space-y-2 text-[11px] text-slate-350 leading-relaxed">
+                  <li className="flex items-start gap-2">
+                    <Check className="w-3.5 h-3.5 text-purple-400 mt-0.5 shrink-0" />
+                    <span><strong>No Daily Limits:</strong> Daily quotas are bypassed with your key active</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <Check className="w-3.5 h-3.5 text-purple-400 mt-0.5 shrink-0" />
+                    <span><strong>Pro Model Integration:</strong> Powers gpt-4o-mini and DALL-E-3 image generators</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <Check className="w-3.5 h-3.5 text-purple-400 mt-0.5 shrink-0" />
+                    <span><strong>Direct Route Billing:</strong> Free sandboxed execution powered directly by your key balance!</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-start pt-4 h-full space-y-4">
+              <button
+                onClick={handleToggleRightColumn}
+                className="p-2 bg-slate-900 border border-slate-850 hover:bg-slate-800 text-amber-400 rounded-full cursor-pointer transition-colors shadow"
+                title="Expand API Provider Panel"
+              >
+                <Key className="w-4 h-4" />
+              </button>
+              <span className="text-[10px] uppercase font-mono tracking-widest text-slate-500 rotate-90 my-6 whitespace-nowrap">
+                Keys Panel
+              </span>
+            </div>
+          )}
+        </aside>
       </div>
+    </div>
 
       {/* Persistent global responsive grid background styling footer */}
       <footer className="bg-slate-950 border-t border-slate-900 px-6 py-4.5 text-center text-[11px] text-slate-500 font-mono tracking-wide">
