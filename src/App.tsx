@@ -245,8 +245,31 @@ export default function App() {
 
     try {
       if (isUsingCustomKey) {
-        console.log("Client-side direct routing active for provider:", preferredProvider);
-        responseData = await generateDirectlyFromClient(type, params, preferredProvider, openaiKey, userGeminiKey);
+        try {
+          console.log("Client-side direct routing active for provider:", preferredProvider);
+          responseData = await generateDirectlyFromClient(type, params, preferredProvider, openaiKey, userGeminiKey);
+        } catch (clientErr: any) {
+          console.warn("Custom key client-side direct generation failed, attempting automatic standard backend proxy fallback:", clientErr);
+          
+          let causeMsg = clientErr.message || "quota limit exceeded";
+          if (causeMsg.includes("quota") || causeMsg.includes("billing")) {
+            causeMsg = "your private API key has empty billing balance or expired limits";
+          }
+          setFallbackWarning(`Notice: Custom key failed (${causeMsg}). CreatorBoost has automatically routed your query to our Free Standard Tier so your work wasn't lost!`);
+          
+          const response = await fetch("/api/generate", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ toolType: type, params }),
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || "Generation request failed on standard fallback.");
+          }
+
+          responseData = await response.json();
+        }
       } else {
         const response = await fetch("/api/generate", {
           method: "POST",
@@ -358,8 +381,31 @@ export default function App() {
     try {
       let resData: any;
       if (preferredProvider === "openai" && openaiKey) {
-        console.log("Client-side direct image routing active");
-        resData = await generateImageDirectlyFromClient(promptText, aspect, preferredProvider, openaiKey, userGeminiKey);
+        try {
+          console.log("Client-side direct image routing active");
+          resData = await generateImageDirectlyFromClient(promptText, aspect, preferredProvider, openaiKey, userGeminiKey);
+        } catch (clientErr: any) {
+          console.warn("Client direct image generation failed, falling back to standard proxy flow:", clientErr);
+          
+          let causeMsg = clientErr.message || "quota limit exceeded";
+          if (causeMsg.includes("quota") || causeMsg.includes("billing")) {
+            causeMsg = "your private API key has empty billing balance or expired limits";
+          }
+          setFallbackWarning(`Notice: Custom key failed (${causeMsg}). CreatorBoost has automatically routed your image creation query to our Free Standard Tier so your work wasn't lost!`);
+          
+          const resp = await fetch("/api/generate-image", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ prompt: promptText, aspectRatio: aspect })
+          });
+
+          if (!resp.ok) {
+            const errorData = await resp.json();
+            throw new Error(errorData.error || "Image generation query failed on standard fallback.");
+          }
+
+          resData = await resp.json();
+        }
       } else {
         const resp = await fetch("/api/generate-image", {
           method: "POST",
